@@ -1,6 +1,6 @@
 # KU ALL LOGIN
-APP_CLIENT_ID="bkn-agro-opas"
-APP_CLIENT_SECRET="dInx8xFMr4zoR3fS8UOaUGwQfgmhzfJ6"
-APP_USER_SCOPE="basic openid"
-APP_REDIRECT_URI="https://opas.agro.ku.ac.th/oauth2/callback"
-APP_LOGOUT_REDIRECT_URI="https://opas.agro.ku.ac.th"
+APP_CLIENT_ID=""
+APP_CLIENT_SECRET=""
+APP_USER_SCOPE=""
+APP_REDIRECT_URI=""
+APP_LOGOUT_REDIRECT_URI=""
