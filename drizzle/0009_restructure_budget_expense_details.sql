@@ -1,0 +1,3 @@
+-- Restructure budget_expense_details table to match expense_details schema
+-- This migration cannot be auto-generated due to table restructuring with foreign key changes
+-- Run this with direct SQL execution, not through Drizzle migrations

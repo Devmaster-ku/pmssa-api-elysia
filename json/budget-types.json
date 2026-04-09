@@ -1,0 +1,70 @@
+{
+  "data": [
+    {
+      "id": 1,
+      "name": "ค่าใช้จ่ายเงินอุดหนุนทั่วไปเพื่อการดำเนินงาน",
+      "budget_category": "support",
+      "budget_category_display": "งบอุดหนุน",
+      "budget_support_id": 3,
+      "department_id": 2,
+      "is_active": true,
+      "created_at": "2025-07-13T02:11:38.000000Z",
+      "updated_at": "2025-07-13T02:11:38.000000Z"
+    },
+    {
+      "id": 2,
+      "name": "ค่าใช้จ่ายเงินอุดหนุนโครงการพัฒนาวิชาการ",
+      "budget_category": "support",
+      "budget_category_display": "งบอุดหนุน",
+      "budget_support_id": 3,
+      "department_id": 2,
+      "is_active": true,
+      "created_at": "2025-07-13T02:12:09.000000Z",
+      "updated_at": "2025-07-13T02:12:09.000000Z"
+    },
+    {
+      "id": 3,
+      "name": "ค่าใช้จ่ายเงินทุนอุดหนุนวิจัยจากแหล่งภายนอก",
+      "budget_category": "support",
+      "budget_category_display": "งบอุดหนุน",
+      "budget_support_id": 3,
+      "department_id": 2,
+      "is_active": true,
+      "created_at": "2025-07-13T02:12:34.000000Z",
+      "updated_at": "2025-07-13T02:12:34.000000Z"
+    },
+    {
+      "id": 4,
+      "name": "ค่าใช้จ่ายอุดหนุนทรัพย์สินทางปัญญาและสิทธิประโยชน์",
+      "budget_category": "support",
+      "budget_category_display": "งบอุดหนุน",
+      "budget_support_id": 3,
+      "department_id": 2,
+      "is_active": true,
+      "created_at": "2025-07-13T02:12:58.000000Z",
+      "updated_at": "2025-07-13T02:12:58.000000Z"
+    },
+    {
+      "id": 5,
+      "name": "ค่าใช้เงินอื่นที่เสนอขออนุมัติตามรายการ/โครงการเฉพาะกิจ",
+      "budget_category": "other",
+      "budget_category_display": "งบรายจ่ายอื่น",
+      "budget_support_id": 2,
+      "department_id": 2,
+      "is_active": true,
+      "created_at": "2025-07-13T02:13:33.000000Z",
+      "updated_at": "2025-07-13T02:13:33.000000Z"
+    },
+    {
+      "id": 6,
+      "name": "ค่าใช้จ่ายตามยุทธศาสตร์การพัฒนามหาวิทยาลัย",
+      "budget_category": "other",
+      "budget_category_display": "งบรายจ่ายอื่น",
+      "budget_support_id": 2,
+      "department_id": 2,
+      "is_active": true,
+      "created_at": "2025-07-13T02:13:57.000000Z",
+      "updated_at": "2025-07-13T02:13:57.000000Z"
+    }
+  ]
+}

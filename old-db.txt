@@ -1,0 +1,2685 @@
+<?php
+
+namespace App\Models;
+
+use Illuminate\Database\Eloquent\Factories\HasFactory;
+use Illuminate\Foundation\Auth\User as Authenticatable;
+use Illuminate\Notifications\Notifiable;
+use Laravel\Sanctum\HasApiTokens;
+use App\Notifications\ResetPasswordNotification;
+use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\BelongsToMany;
+use Illuminate\Database\Eloquent\Casts\Attribute;
+use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Str;
+use Illuminate\Support\Facades\Storage;
+use App\Models\UserSignature;
+
+class User extends Authenticatable
+{
+    /** @use HasFactory<\Database\Factories\UserFactory> */
+    use HasApiTokens, HasFactory, Notifiable;
+
+    /**
+     * Available user roles
+     */
+    public const ROLES = [
+        'super_admin' => 'ผู้ดูแลระบบหลัก', // เห็นทุกหน่วยงาน
+        'admin' => 'ผู้ดูแลระบบ', // เห็นเฉพาะหน่วยงานตนเองที่สังกัด (Department Admin)
+        'manager' => 'ผู้บริหาร',
+        'project-manager' => 'หัวหน้าโครงการ',
+        'staff' => 'เจ้าหน้าที่',
+        'member' => 'สมาชิก'
+    ];
+
+    /**
+     * KU Departments/Agencies
+     */
+    public const DEPARTMENTS = [
+        'คณะเกษตร' => 'คณะเกษตร',
+        'คณะสถาปัตยกรรมศาสตร์' => 'คณะสถาปัตยกรรมศาสตร์',
+        'คณะวนศาสตร์' => 'คณะวนศาสตร์',
+        'คณะพยาบาลศาสตร์' => 'คณะพยาบาลศาสตร์',
+        'คณะเศรษฐศาสตร์' => 'คณะเศรษฐศาสตร์',
+        'คณะอุตสาหกรรมเกษตร' => 'คณะอุตสาหกรรมเกษตร',
+        'คณะสิ่งแวดล้อม' => 'คณะสิ่งแวดล้อม',
+        'คณะอุตสาหกรรมบริการ' => 'คณะอุตสาหกรรมบริการ',
+        'วิทยาลัยนานาชาติ' => 'วิทยาลัยนานาชาติ',
+        'คณะวิศวกรรมศาสตร์ ศรีราชา' => 'คณะวิศวกรรมศาสตร์ ศรีราชา',
+        'คณะพาณิชยนาวีนานาชาติ' => 'คณะพาณิชยนาวีนานาชาติ',
+        'คณะวิทยาการจัดการ' => 'คณะวิทยาการจัดการ',
+        'คณะวิทยาศาสตร์ ศรีราชา' => 'คณะวิทยาศาสตร์ ศรีราชา',
+        'คณะเศรษฐศาสตร์ ศรีราชา' => 'คณะเศรษฐศาสตร์ ศรีราชา',
+        'สำนักงานวิทยาเขตศรีราชา' => 'สำนักงานวิทยาเขตศรีราชา',
+        'ส่วนกลางวิทยาเขตศรีราชา' => 'ส่วนกลางวิทยาเขตศรีราชา',
+
+    ];
+
+    /**
+     * หน่วยงานที่อนุมัติให้ใช้งานระบบ
+     */
+    public const APPROVED_DEPARTMENTS = [
+        'คณะเกษตร',
+        'คณะสถาปัตยกรรมศาสตร์',
+        'คณะวนศาสตร์',
+        'คณะพยาบาลศาสตร์',
+        'คณะเศรษฐศาสตร์',
+        'คณะอุตสาหกรรมเกษตร',
+        'คณะสิ่งแวดล้อม',
+        'คณะอุตสาหกรรมบริการ',
+        'วิทยาลัยนานาชาติ',
+        'คณะวิศวกรรมศาสตร์ ศรีราชา',
+        'คณะพาณิชยนาวีนานาชาติ',
+        'คณะวิทยาการจัดการ',
+        'คณะวิทยาศาสตร์ ศรีราชา',
+        'คณะเศรษฐศาสตร์ ศรีราชา',
+        'สำนักงานวิทยาเขตศรีราชา',
+        'ส่วนกลางวิทยาเขตศรีราชา',
+    ];
+
+    /**
+     * ตรวจสอบว่าหน่วยงานได้รับอนุมัติให้ใช้งานระบบหรือไม่
+     */
+    public static function isDepartmentApproved(string $department): bool
+    {
+        return in_array($department, self::APPROVED_DEPARTMENTS);
+    }
+
+    /**
+     * Send password reset notification
+     */
+    public function sendPasswordResetNotification($token)
+    {
+        try {
+            $this->notify(new ResetPasswordNotification($token));
+
+            // Log successful password reset email
+            Log::info('Password reset email sent', [
+                'user_id' => $this->id,
+                'email' => $this->email,
+                'token_preview' => substr($token, 0, 8) . '...',
+                'timestamp' => now()
+            ]);
+        } catch (\Exception $e) {
+            // Log failed password reset email
+            Log::error('Failed to send password reset email', [
+                'user_id' => $this->id,
+                'email' => $this->email,
+                'error' => $e->getMessage(),
+                'timestamp' => now()
+            ]);
+
+            // Re-throw the exception so the user knows there was an error
+            throw $e;
+        }
+    }
+
+    /**
+     * The attributes that are mass assignable.
+     */
+    protected $fillable = [
+        'name',
+        'email',
+        'password',
+        'phone',
+        'department',
+        'position',
+        'management_position',
+        'is_management',
+        'avatar',
+        'role',
+        'is_active',
+        'last_login_at',
+        'email_verified_at',
+        // KU specific fields
+        'ku_uid',
+        'ku_faculty_id',
+        'ku_position',
+    ];
+
+    /**
+     * The attributes that should be hidden for serialization.
+     */
+    protected $hidden = [
+        'password',
+        'remember_token',
+    ];
+
+    /**
+     * Get the attributes that should be cast.
+     */
+    protected function casts(): array
+    {
+        return [
+            'email_verified_at' => 'datetime',
+            'password' => 'hashed',
+            'is_active' => 'boolean',
+            'is_management' => 'boolean',
+            'last_login_at' => 'datetime',
+        ];
+    }
+
+    /* ==================== RELATIONSHIPS ==================== */
+
+    /**
+     * Relationship กับ UserNotification
+     */
+    public function userNotifications(): HasMany
+    {
+        return $this->hasMany(UserNotification::class);
+    }
+
+    /**
+     * Relationship กับ UserNotification ที่ยังไม่ได้อ่าน
+     */
+    public function unreadUserNotifications(): HasMany
+    {
+        return $this->hasMany(UserNotification::class)->unread();
+    }
+
+    /**
+     * Relationship กับ DepartmentUser
+     */
+    public function departmentUsers(): HasMany
+    {
+        return $this->hasMany(DepartmentUser::class);
+    }
+
+    /**
+     * Relationship กับ DepartmentUser ที่ active เท่านั้น
+     */
+    public function activeDepartmentUsers(): HasMany
+    {
+        return $this->hasMany(DepartmentUser::class)->where('is_active', true);
+    }
+
+    /**
+     * Relationship กับ departments ผ่าน pivot table
+     */
+    public function departments(): BelongsToMany
+    {
+        return $this->belongsToMany(Department::class, 'department_users')
+            ->wherePivot('is_active', true)
+            ->withPivot(['position', 'role', 'roles', 'sub_department_id', 'created_by', 'created_at'])
+            ->withTimestamps();
+    }
+
+    /**
+     * Relationship กับ departments ทั้งหมด (รวม inactive)
+     */
+    public function allDepartments(): BelongsToMany
+    {
+        return $this->belongsToMany(Department::class, 'department_users')
+            ->withPivot(['position', 'role', 'roles', 'sub_department_id', 'is_active', 'created_by', 'created_at'])
+            ->withTimestamps();
+    }
+
+    /* ==================== DEPARTMENT METHODS ==================== */
+
+    /**
+     * ตรวจสอบว่าผู้ใช้เป็นสมาชิกของหน่วยงานหรือไม่
+     */
+    public function belongsToDepartment($departmentId): bool
+    {
+        return $this->departmentUsers()
+            ->where('department_id', $departmentId)
+            ->where('is_active', true)
+            ->exists();
+    }
+
+    /**
+     * ดึงบทบาทในหน่วยงานเฉพาะ
+     */
+    public function getRoleInDepartment($departmentId): ?string
+    {
+        $departmentUser = $this->departmentUsers()
+            ->where('department_id', $departmentId)
+            ->where('is_active', true)
+            ->first();
+
+        return $departmentUser ? $departmentUser->role : null;
+    }
+
+    /**
+     * ตรวจสอบสิทธิ์ในการจัดการหน่วยงาน
+     */
+    public function canManageDepartment($departmentId): bool
+    {
+        if ($this->isAdmin()) {
+            return true;
+        }
+
+        $role = $this->getRoleInDepartment($departmentId);
+        return in_array($role, ['admin', 'manager', 'project-manager']);
+    }
+
+    /**
+     * ตรวจสอบว่า Admin สามารถจัดการข้อมูลในคณะได้หรือไม่
+     */
+    public function canManageInFaculty($departmentId): bool
+    {
+        // Super Admin เข้าถึงได้ทุกอย่าง
+        if ($this->isSuperAdmin()) {
+            return true;
+        }
+
+        // Admin ธรรมดา - ตรวจสอบตามคณะ
+        if ($this->isAdmin()) {
+            return $this->isInSameFaculty($departmentId);
+        }
+
+        return false;
+    }
+
+    /**
+     * ดึงรายการ ID ของหน่วยงานทั้งหมดที่ Admin สามารถจัดการได้ในคณะของตน
+     */
+    public function getManageableDepartmentIdsInFaculty(): array
+    {
+        // Super Admin เห็นทุกหน่วยงาน
+        if ($this->isSuperAdmin()) {
+            try {
+                return Department::where('is_active', true)->pluck('id')->toArray();
+            } catch (\Exception $e) {
+                Log::warning('Failed to get all departments for super admin', [
+                    'user_id' => $this->id,
+                    'error' => $e->getMessage()
+                ]);
+                return [];
+            }
+        }
+
+        // Admin/Manager - เฉพาะในคณะของตนเอง
+        if (!$this->isAdmin() && !$this->isManager()) {
+            return $this->getAccessibleDepartmentIds()->toArray();
+        }
+
+        try {
+            $manageableIds = collect();
+            
+            // ดึงหน่วยงานที่ admin นี้สังกัด
+            $userDepartments = $this->departments()->get();
+            
+            foreach ($userDepartments as $userDept) {
+                // หาคณะหลักของหน่วยงานนี้
+                $faculty = $this->getFacultyDepartment($userDept);
+                
+                if ($faculty) {
+                    // เพิ่มคณะหลัก
+                    $manageableIds->push($faculty->id);
+                    
+                    // เพิ่มหน่วยงานย่อยทั้งหมดในคณะนี้
+                    $subDepartments = $faculty->getAllDescendants();
+                    foreach ($subDepartments as $sub) {
+                        $manageableIds->push($sub->id);
+                    }
+                }
+            }
+
+            return $manageableIds->unique()->values()->toArray();
+            
+        } catch (\Exception $e) {
+            \Illuminate\Support\Facades\Log::warning('Failed to get manageable department IDs for admin', [
+                'user_id' => $this->id,
+                'error' => $e->getMessage()
+            ]);
+            
+            // Fallback to accessible departments
+            return $this->getAccessibleDepartmentIds()->toArray();
+        }
+    }
+
+    /**
+     * ดึงหน่วยงานหลักของผู้ใช้
+     */
+    public function getPrimaryDepartment(): ?Department
+    {
+        try {
+            // วิธีที่ 1: ดึงจาก pivot table (primary method)
+            $departmentUser = $this->activeDepartmentUsers()
+                ->with('department')
+                ->orderByDesc('role') // Admin, Manager มาก่อน
+                ->orderByDesc('created_at') // ล่าสุดมาก่อน
+                ->first();
+
+            if ($departmentUser && $departmentUser->department) {
+                return $departmentUser->department;
+            }
+
+            // วิธีที่ 2: ดึงจาก direct foreign key
+            if (isset($this->attributes['department_id']) && $this->department_id) {
+                return Department::find($this->department_id);
+            }
+
+            // วิธีที่ 3: ดึงจาก department field (legacy)
+            if (isset($this->attributes['department']) && $this->department) {
+                return Department::where('name', $this->department)
+                    ->where('is_active', true)
+                    ->first();
+            }
+
+        } catch (\Exception $e) {
+            Log::warning('Failed to get primary department', [
+                'user_id' => $this->id,
+                'error' => $e->getMessage()
+            ]);
+        }
+
+        return null;
+    }
+
+    /**
+     * Relationship with strategies that user created
+     */
+    public function createdStrategies(): HasMany
+    {
+        return $this->hasMany(Strategy::class, 'created_by');
+    }
+
+    /**
+     * Relationship with strategies that user updated
+     */
+    public function updatedStrategies(): HasMany
+    {
+        return $this->hasMany(Strategy::class, 'updated_by');
+    }
+
+    /**
+     * Relationship with strategies that user deleted
+     */
+    public function deletedStrategies(): HasMany
+    {
+        return $this->hasMany(Strategy::class, 'deleted_by');
+    }
+
+    /**
+     * Relationship with user signatures
+     */
+    public function signatures(): HasMany
+    {
+        return $this->hasMany(UserSignature::class);
+    }
+
+    /**
+     * Get active signatures
+     */
+    public function activeSignatures(): HasMany
+    {
+        return $this->hasMany(UserSignature::class)->where('is_active', true);
+    }
+
+    /**
+     * Get the primary (most recent active) signature
+     */
+    public function primarySignature()
+    {
+        return $this->hasMany(UserSignature::class)
+                    ->where('is_active', true)
+                    ->latest()
+                    ->first();
+    }
+
+    /**
+     * Get strategies accessible by this user
+     */
+    public function accessibleStrategies()
+    {
+        return Strategy::accessibleBy($this)->active();
+    }
+
+    /**
+     * Get user's department ID
+     * This method should be added if it doesn't exist
+     */
+    public function getUserDepartmentId()
+    {
+        // Check if user has department relationship
+        $departmentUser = $this->departmentUsers()->where('is_active', true)->first();
+        
+        if ($departmentUser) {
+            return $departmentUser->department_id;
+        }
+
+        // Check if user has department field
+        if (!empty($this->department)) {
+            $department = Department::where('name', $this->department)
+                ->where('is_active', true)
+                ->first();
+            
+            if ($department) {
+                return $department->id;
+            }
+        }
+
+        // Check if user created any department
+        $createdDepartment = Department::where('created_by', $this->id)
+            ->where('is_active', true)
+            ->first();
+
+        if ($createdDepartment) {
+            return $createdDepartment->id;
+        }
+
+        return null;
+    }
+
+    /**
+     * 🔥 ดึงหน่วยงานหลัก (คณะ) ทั้งหมดที่ผู้ใช้สามารถเข้าถึงได้
+     * รองรับทั้งแบบ many-to-many และ direct assignment
+     */
+    public function getAccessibleFaculties()
+    {
+        try {
+            // Super Admin เข้าถึงได้ทุกคณะ
+            if ($this->isSuperAdmin()) {
+                return Department::where('type', 'main')
+                    ->where('is_active', true)
+                    ->orderBy('name')
+                    ->get();
+            }
+
+            $faculties = collect();
+
+            // วิธีที่ 1: ดึงจาก many-to-many relationship
+            if (method_exists($this, 'departments')) {
+                $userDepartments = $this->departments()->get();
+                
+                foreach ($userDepartments as $dept) {
+                    $faculty = $this->findUserFacultyDepartment($dept);
+                    if ($faculty) {
+                        $faculties->push($faculty);
+                    }
+                }
+            }
+
+            // วิธีที่ 2: ดึงจาก department field (เก่า)
+            if ($faculties->isEmpty() && !empty($this->department)) {
+                $userDept = Department::where('name', $this->department)
+                    ->where('is_active', true)
+                    ->first();
+                    
+                if ($userDept) {
+                    $faculty = $this->findUserFacultyDepartment($userDept);
+                    if ($faculty) {
+                        $faculties->push($faculty);
+                    }
+                }
+            }
+
+            // วิธีที่ 3: ดูจากหน่วยงานที่สร้างโดย user
+            if ($faculties->isEmpty()) {
+                $createdDepts = Department::where('created_by', $this->id)
+                    ->where('is_active', true)
+                    ->get();
+                    
+                foreach ($createdDepts as $dept) {
+                    $faculty = $this->findUserFacultyDepartment($dept);
+                    if ($faculty) {
+                        $faculties->push($faculty);
+                    }
+                }
+            }
+
+            return $faculties->unique('id')->sortBy('name');
+
+        } catch (\Exception $e) {
+            Log::error('Failed to get accessible faculties', [
+                'user_id' => $this->id,
+                'error' => $e->getMessage()
+            ]);
+            
+            return collect();
+        }
+    }
+
+    /**
+     * 🔥 หาหน่วยงานหลัก (คณะ) จากหน่วยงานที่กำหนด
+     * ปรับปรุงจาก getFacultyDepartment() เดิม
+     */
+    public function findUserFacultyDepartment($department)
+    {
+        if (!$department) {
+            return null;
+        }
+
+        try {
+            // ถ้าเป็นหน่วยงานหลักอยู่แล้ว
+            if ($department->type === 'main') {
+                return $department;
+            }
+
+            // หาขึ้นไปจนถึงหน่วยงานหลัก
+            $current = $department;
+            $maxDepth = 10; // ป้องกัน infinite loop
+            $depth = 0;
+            $visited = collect([$department->id]);
+
+            while ($current && $current->parent_id && $depth < $maxDepth) {
+                // ป้องกัน circular reference
+                if ($visited->contains($current->parent_id)) {
+                    Log::warning('Circular reference detected in department hierarchy', [
+                        'user_id' => $this->id,
+                        'department_id' => $department->id,
+                        'current_id' => $current->id,
+                        'parent_id' => $current->parent_id
+                    ]);
+                    break;
+                }
+
+                $parent = Department::find($current->parent_id);
+                if (!$parent || !$parent->is_active) {
+                    break;
+                }
+
+                $visited->push($parent->id);
+
+                if ($parent->type === 'main') {
+                    return $parent;
+                }
+                
+                $current = $parent;
+                $depth++;
+            }
+
+            // ถ้าไม่พบหน่วยงานหลัก อาจเป็น standalone department
+            Log::info('No faculty found for department', [
+                'user_id' => $this->id,
+                'department_id' => $department->id,
+                'department_name' => $department->name,
+                'department_type' => $department->type
+            ]);
+
+        } catch (\Exception $e) {
+            Log::error('Error finding user faculty department', [
+                'user_id' => $this->id,
+                'department_id' => $department->id ?? null,
+                'error' => $e->getMessage()
+            ]);
+        }
+
+        return null;
+    }
+
+    /**
+     * 🔥 ดึงหน่วยงานทั้งหมดที่ผู้ใช้สามารถเข้าถึงได้ (สำหรับ filter)
+     * รวมหน่วยงานหลักและหน่วยงานย่อย
+     */
+    public function getAccessibleDepartmentsForFilter()
+    {
+        try {
+            // Super Admin เข้าถึงได้ทุกหน่วยงาน
+            if ($this->isSuperAdmin()) {
+                return Department::where('is_active', true)
+                    ->orderBy('type', 'desc') // main ก่อน sub
+                    ->orderBy('name')
+                    ->get();
+            }
+
+            $allDepartments = collect();
+            $faculties = $this->getAccessibleFaculties();
+
+            foreach ($faculties as $faculty) {
+                // เพิ่มหน่วยงานหลัก (คณะ)
+                $allDepartments->push($faculty);
+                
+                // เพิ่มหน่วยงานย่อยทั้งหมดภายใต้คณะนี้
+                $subDepartments = $this->getAllSubDepartmentsRecursive($faculty->id);
+                $allDepartments = $allDepartments->merge($subDepartments);
+            }
+
+            return $allDepartments->unique('id')
+                ->sortBy(['type', 'name']); // เรียงตาม type แล้วตาม name
+
+        } catch (\Exception $e) {
+            Log::error('Failed to get accessible departments for filter', [
+                'user_id' => $this->id,
+                'error' => $e->getMessage()
+            ]);
+            
+            return collect();
+        }
+    }
+
+    /**
+     * 🔥 ดึงหน่วยงานย่อยทั้งหมดภายใต้หน่วยงานหลัก (recursive)
+     */
+    private function getAllSubDepartmentsRecursive($parentId)
+    {
+        $allSubs = collect();
+        
+        try {
+            $directSubs = Department::where('parent_id', $parentId)
+                ->where('is_active', true)
+                ->orderBy('name')
+                ->get();
+            
+            foreach ($directSubs as $sub) {
+                $allSubs->push($sub);
+                
+                // Recursive สำหรับหน่วยงานย่อยระดับลึกกว่า
+                $deeperSubs = $this->getAllSubDepartmentsRecursive($sub->id);
+                $allSubs = $allSubs->merge($deeperSubs);
+            }
+            
+        } catch (\Exception $e) {
+            Log::error('Error getting sub-departments recursively', [
+                'parent_id' => $parentId,
+                'user_id' => $this->id,
+                'error' => $e->getMessage()
+            ]);
+        }
+        
+        return $allSubs;
+    }
+
+    /**
+     * 🔥 ตรวจสอบว่าผู้ใช้สามารถเข้าถึงหน่วยงานนี้ได้หรือไม่ (Enhanced)
+     */
+    public function canAccessDepartmentEnhanced($departmentId): bool
+    {
+        if (!$departmentId) {
+            return false;
+        }
+
+        // Super Admin เข้าถึงได้ทุกหน่วยงาน
+        if ($this->isSuperAdmin()) {
+            return true;
+        }
+
+        try {
+            $accessibleDepartmentIds = $this->getAccessibleDepartmentsForFilter()
+                ->pluck('id')
+                ->toArray();
+                
+            return in_array($departmentId, $accessibleDepartmentIds);
+
+        } catch (\Exception $e) {
+            Log::error('Error checking department access', [
+                'user_id' => $this->id,
+                'department_id' => $departmentId,
+                'error' => $e->getMessage()
+            ]);
+            
+            return false;
+        }
+    }
+
+    /**
+     * 🔥 Debug ข้อมูลการเข้าถึงหน่วยงานสำหรับ filter (ใช้สำหรับแก้ไขปัญหา)
+     */
+    public function debugDepartmentFilter(): array
+    {
+        try {
+            $faculties = $this->getAccessibleFaculties();
+            $allDepartments = $this->getAccessibleDepartmentsForFilter();
+            
+            return [
+                'user_info' => [
+                    'id' => $this->id,
+                    'name' => $this->name,
+                    'email' => $this->email,
+                    'role' => $this->role,
+                    'is_super_admin' => $this->isSuperAdmin(),
+                ],
+                'user_departments' => $this->departments()->get()->map(function($dept) {
+                    return [
+                        'id' => $dept->id,
+                        'name' => $dept->name,
+                        'type' => $dept->type,
+                        'parent_id' => $dept->parent_id,
+                    ];
+                })->toArray(),
+                'accessible_faculties' => $faculties->map(function($faculty) {
+                    return [
+                        'id' => $faculty->id,
+                        'name' => $faculty->name,
+                        'type' => $faculty->type,
+                    ];
+                })->toArray(),
+                'accessible_departments_count' => [
+                    'total' => $allDepartments->count(),
+                    'main' => $allDepartments->where('type', 'main')->count(),
+                    'sub' => $allDepartments->where('type', 'sub')->count(),
+                ],
+                'accessible_department_ids' => $allDepartments->pluck('id')->toArray(),
+            ];
+
+        } catch (\Exception $e) {
+            return [
+                'error' => 'Failed to debug department filter: ' . $e->getMessage(),
+                'user_id' => $this->id,
+            ];
+        }
+    }
+
+    /**
+     * ดึงรายการหน่วยงานทั้งหมดที่ admin สามารถจัดการได้
+     */
+    public function getManageableDepartmentIds(): array
+    {
+        if ($this->isSuperAdmin()) {
+            return Department::where('is_active', true)->pluck('id')->toArray();
+        }
+
+        if (!$this->isAdmin()) {
+            // Non-admin users ใช้วิธีเดิม
+            return $this->getAccessibleDepartmentIds()->toArray();
+        }
+
+        // Department Admin - เข้าถึงได้ทั้งคณะ
+        $manageableIds = collect();
+        
+        foreach ($this->departments as $dept) {
+            $faculty = $this->getFacultyDepartment($dept);
+            if ($faculty) {
+                // เพิ่มคณะหลัก
+                $manageableIds->push($faculty->id);
+                
+                // เพิ่มหน่วยงานย่อยทั้งหมดในคณะ
+                $subDepartments = $this->getAllSubDepartments($faculty->id);
+                $manageableIds = $manageableIds->merge($subDepartments);
+            }
+        }
+
+        return $manageableIds->unique()->values()->toArray();
+    }
+
+    /**
+     * ดึงหน่วยงานย่อยทั้งหมดภายในคณะ
+     */
+    private function getAllSubDepartments($facultyId): \Illuminate\Support\Collection
+    {
+        $allSubs = collect();
+        
+        $directSubs = Department::where('parent_id', $facultyId)
+            ->where('is_active', true)
+            ->get();
+        
+        foreach ($directSubs as $sub) {
+            $allSubs->push($sub->id);
+            // Recursive สำหรับหน่วยงานย่อยระดับลึกกว่า
+            $deeperSubs = $this->getAllSubDepartments($sub->id);
+            $allSubs = $allSubs->merge($deeperSubs);
+        }
+        
+        return $allSubs;
+    }
+
+    /**
+     * ตรวจสอบว่าผู้ใช้เป็น admin ของคณะเดียวกันหรือไม่
+     */
+    public function canAccessFacultyData($targetDepartmentId): bool
+    {
+        // Super Admin เข้าถึงได้ทั้งหมด
+        if ($this->isSuperAdmin()) {
+            return true;
+        }
+
+        // Admin ธรรมดาตรวจสอบตามคณะ
+        if ($this->isAdmin()) {
+            return $this->isInSameFaculty($targetDepartmentId);
+        }
+
+        // Manager/Project Manager ตรวจสอบตามสิทธิ์หน่วยงาน
+        if ($this->isManager() || $this->isProjectManager()) {
+            return $this->belongsToDepartment($targetDepartmentId) || 
+                $this->canManageDepartment($targetDepartmentId);
+        }
+
+        return false;
+    }
+
+    /**
+     * ตรวจสอบว่าอยู่ในคณะเดียวกันหรือไม่
+     */
+    // public function isInSameFaculty($targetDepartmentId): bool
+    // {
+    //     if (!$targetDepartmentId) {
+    //         return false;
+    //     }
+
+    //     // หาคณะของผู้ใช้
+    //     $userFaculties = collect();
+    //     foreach ($this->departments as $dept) {
+    //         $faculty = $this->getFacultyDepartment($dept);
+    //         if ($faculty) {
+    //             $userFaculties->push($faculty->id);
+    //         }
+    //     }
+
+    //     // หาคณะของ target department
+    //     $targetDepartment = Department::find($targetDepartmentId);
+    //     if (!$targetDepartment) {
+    //         return false;
+    //     }
+
+    //     $targetFaculty = $this->getFacultyDepartment($targetDepartment);
+    //     if (!$targetFaculty) {
+    //         return false;
+    //     }
+
+    //     return $userFaculties->contains($targetFaculty->id);
+    // }
+
+    /**
+     * Check if user can manage strategies
+     */
+    public function canManageStrategies(): bool
+    {
+        return $this->isAdmin() || $this->isManager() || $this->isProjectManager();
+    }
+
+    /**
+     * Check if user can create strategies
+     */
+    public function canCreateStrategies(): bool
+    {
+        return $this->canManageStrategies() || $this->isStaff();
+    }
+
+    /**
+     * Check if user can edit specific strategy
+     * ✅ อัปเดต: อนุญาตให้ผู้ใช้ทุกคนแก้ไขได้
+     */
+    public function canEditStrategy(Strategy $strategy): bool
+    {
+        // ✅ วิธีที่ 1: อนุญาตให้ทุกคนแก้ไขได้
+        return true;
+    }
+
+    /**
+     * Check if user can delete specific strategy
+     */
+    public function canDeleteStrategy(Strategy $strategy): bool
+    {
+        if ($this->isAdmin()) {
+            return true;
+        }
+
+        // Only creator can delete (unless admin)
+        return $strategy->created_by === $this->id;
+    }
+
+
+    /**
+     * ตรวจสอบว่าผู้ใช้สามารถเข้าถึงโครงการได้หรือไม่
+     * รองรับทั้งแบบ direct department_id และ many-to-many relationship
+     * 
+     * @param Project $project โครงการที่ต้องการตรวจสอบ
+     * @return bool
+     */
+    public function canAccessProject($project): bool
+    {
+        // ตรวจสอบว่า $project เป็น object ที่มี properties ที่จำเป็น
+        if (!$project || !isset($project->department_id)) {
+            return false;
+        }
+
+        // Super Admin สามารถเข้าถึงได้ทุกโครงการ
+        if ($this->isSuperAdmin()) {
+            return true;
+        }
+
+        // Admin สามารถเข้าถึงได้ทุกโครงการในคณะของตน
+        if ($this->isAdmin()) {
+            return $this->canAccessFacultyData($project->department_id);
+        }
+
+        // เจ้าของโครงการ
+        if (isset($project->created_by) && $project->created_by === $this->id) {
+            return true;
+        }
+
+        // ตรวจสอบการเป็นสมาชิกในหน่วยงานเดียวกัน
+        return $this->belongsToDepartmentEnhanced($project->department_id);
+    }
+
+    /**
+     * ตรวจสอบการเป็นสมาชิกของหน่วยงาน (Enhanced version)
+     * รองรับทั้ง many-to-many และ direct foreign key
+     * 
+     * @param int|string $departmentId ID ของหน่วยงาน
+     * @return bool
+     */
+    public function belongsToDepartmentEnhanced($departmentId): bool
+    {
+        if (!$departmentId) {
+            return false;
+        }
+
+        try {
+            // วิธีที่ 1: ตรวจสอบผ่าน pivot table (primary method)
+            if (method_exists($this, 'departmentUsers') && $this->departmentUsers()->exists()) {
+                $exists = $this->departmentUsers()
+                    ->where('department_id', $departmentId)
+                    ->where('is_active', true)
+                    ->exists();
+                
+                if ($exists) {
+                    return true;
+                }
+            }
+
+            // วิธีที่ 2: ตรวจสอบผ่าน direct foreign key
+            if (isset($this->attributes['department_id']) && $this->department_id) {
+                if ((int) $this->department_id === (int) $departmentId) {
+                    return true;
+                }
+            }
+
+            // วิธีที่ 3: ตรวจสอบผ่าน department field (string comparison)
+            if (isset($this->attributes['department']) && $this->department) {
+                // ถ้า $departmentId เป็น string ให้เปรียบเทียบตรงๆ
+                if (is_string($departmentId)) {
+                    return $this->department === $departmentId;
+                }
+                
+                // ถ้า $departmentId เป็น int ให้ดึงชื่อจาก Department Model
+                try {
+                    $department = Department::find($departmentId);
+                    return $department && $this->department === $department->name;
+                } catch (\Exception $e) {
+                    // ถ้าไม่มี Department Model หรือเกิดข้อผิดพลาด
+                    return false;
+                }
+            }
+
+        } catch (\Exception $e) {
+            \Illuminate\Support\Facades\Log::warning('Failed to check department membership', [
+                'user_id' => $this->id,
+                'department_id' => $departmentId,
+                'error' => $e->getMessage()
+            ]);
+        }
+
+        return false;
+    }
+
+    /**
+     * ดึงสถิติโครงการที่ผู้ใช้สามารถเข้าถึงได้
+     * 
+     * @param int $days จำนวนวันย้อนหลัง
+     * @param bool $onlyUserProjects แสดงเฉพาะโครงการของผู้ใช้
+     * @return array
+     */
+    public function getAccessibleProjectStats(int $days = 30, bool $onlyUserProjects = false): array
+    {
+        try {
+            $startDate = now()->subDays($days);
+            
+            // ดึง accessible departments
+            $accessibleDepartmentIds = $this->getAccessibleDepartmentIds()->toArray();
+            
+            // สร้าง base query
+            $query = Project::where('created_at', '>=', $startDate);
+            
+            if ($this->isSuperAdmin()) {
+                // Super Admin เห็นทุกอย่าง - ไม่ต้องกรอง
+            } elseif ($onlyUserProjects) {
+                // แสดงเฉพาะโครงการของผู้ใช้
+                $query->where('created_by', $this->id);
+            } else {
+                // กรองตาม accessible departments และโครงการของตนเอง
+                $query->where(function($q) use ($accessibleDepartmentIds) {
+                    $q->where('created_by', $this->id);
+                    
+                    if (!empty($accessibleDepartmentIds)) {
+                        $q->orWhereIn('department_id', $accessibleDepartmentIds);
+                    }
+                });
+            }
+
+            // นับตามสถานะ
+            $stats = [
+                'total' => $query->count(),
+                'draft' => $query->clone()->where('status', 'draft')->count(),
+                'pending_approval' => $query->clone()->where('status', 'pending_approval')->count(),
+                'approved' => $query->clone()->where('status', 'approved')->count(),
+                'rejected' => $query->clone()->where('status', 'rejected')->count(),
+                'active' => $query->clone()->where('status', 'active')->count(),
+                'completed' => $query->clone()->where('status', 'completed')->count(),
+                'cancelled' => $query->clone()->where('status', 'cancelled')->count(),
+            ];
+
+            // คำนวณ derived stats
+            $stats['my_projects'] = Project::where('created_by', $this->id)
+                ->where('created_at', '>=', $startDate)
+                ->count();
+                
+            $submittedForApproval = $stats['approved'] + $stats['rejected'];
+            $stats['approval_rate'] = $submittedForApproval > 0 
+                ? round(($stats['approved'] / $submittedForApproval) * 100, 1)
+                : 0;
+
+            return $stats;
+            
+        } catch (\Exception $e) {
+            Log::error('Failed to get accessible project stats', [
+                'user_id' => $this->id,
+                'days' => $days,
+                'only_user_projects' => $onlyUserProjects,
+                'error' => $e->getMessage()
+            ]);
+            
+            // Return empty stats on error
+            return [
+                'total' => 0,
+                'draft' => 0,
+                'pending_approval' => 0,
+                'approved' => 0,
+                'rejected' => 0,
+                'active' => 0,
+                'completed' => 0,
+                'cancelled' => 0,
+                'my_projects' => 0,
+                'approval_rate' => 0,
+            ];
+        }
+    }
+
+
+    /**
+     * ดึงหน่วยงานที่ผู้ใช้สามารถเข้าถึงได้ทั้งหมด
+     * 
+     * @return \Illuminate\Support\Collection
+     */
+    // public function getAccessibleDepartmentIds(): \Illuminate\Support\Collection
+    // {
+    //     // Super Admin เห็นทุกหน่วยงาน
+    //     if ($this->isSuperAdmin()) {
+    //         try {
+    //             return Department::where('is_active', true)->pluck('id');
+    //         } catch (\Exception $e) {
+    //             Log::warning('Failed to get all departments for super admin', [
+    //                 'user_id' => $this->id,
+    //                 'error' => $e->getMessage()
+    //             ]);
+    //             return collect();
+    //         }
+    //     }
+
+    //     $departmentIds = collect();
+
+    //     try {
+    //         // ดึงจาก pivot table (primary method)
+    //         if (method_exists($this, 'departmentUsers')) {
+    //             $pivotIds = $this->departmentUsers()
+    //                 ->where('is_active', true)
+    //                 ->pluck('department_id');
+    //             $departmentIds = $departmentIds->merge($pivotIds);
+    //         }
+
+    //         // ดึงจาก direct foreign key (fallback method)
+    //         if (isset($this->attributes['department_id']) && $this->department_id) {
+    //             $departmentIds->push($this->department_id);
+    //         }
+
+    //         // ดึงจาก department field แบบ string (legacy support)
+    //         if (isset($this->attributes['department']) && $this->department) {
+    //             try {
+    //                 $department = Department::where('name', $this->department)
+    //                     ->where('is_active', true)
+    //                     ->first();
+                    
+    //                 if ($department) {
+    //                     $departmentIds->push($department->id);
+    //                 }
+    //             } catch (\Exception $e) {
+    //                 // Ignore database errors for legacy support
+    //             }
+    //         }
+
+    //     } catch (\Exception $e) {
+    //         Log::warning('Failed to get accessible department IDs', [
+    //             'user_id' => $this->id,
+    //             'error' => $e->getMessage()
+    //         ]);
+    //     }
+
+    //     return $departmentIds->unique()->values();
+    // }
+
+    /**
+     * ตรวจสอบว่าผู้ใช้สามารถจัดการเอกสารได้หรือไม่
+     * 
+     * @param ProjectDocument $document เอกสารที่ต้องการจัดการ
+     * @return bool
+     */
+    public function canManageDocument($document): bool
+    {
+        // Admin สามารถจัดการได้ทุกเอกสาร
+        if ($this->isAnyAdmin()) {
+            return true;
+        }
+
+        // ผู้อัปโหลดสามารถจัดการเอกสารของตนเอง
+        if ($document->uploaded_by === $this->id) {
+            return true;
+        }
+
+        // ผู้ที่สามารถเข้าถึงโครงการสามารถจัดการเอกสารได้
+        if ($this->canAccessProject($document->project)) {
+            $role = $this->getRoleInDepartment($document->project->department_id);
+            // เฉพาะ admin, manager, project-manager เท่านั้นที่จัดการเอกสารของคนอื่นได้
+            return in_array($role, ['admin', 'manager', 'project-manager']);
+        }
+
+        return false;
+    }
+
+    /**
+     * ตรวจสอบว่าผู้ใช้สามารถอนุมัติเอกสารได้หรือไม่
+     * 
+     * @param ProjectDocument $document เอกสารที่ต้องการอนุมัติ
+     * @return bool
+     */
+    public function canApproveDocument($document): bool
+    {
+        // Super Admin สามารถอนุมัติได้ทุกเอกสาร
+        if ($this->isSuperAdmin()) {
+            return true;
+        }
+
+        // ตรวจสอบสิทธิ์ระดับหน่วยงาน
+        $role = $this->getRoleInDepartment($document->project->department_id);
+        return in_array($role, ['admin', 'manager', 'project-manager']);
+    }
+
+    /**
+     * ดึงโครงการที่ผู้ใช้สามารถเข้าถึงได้
+     * 
+     * @return \Illuminate\Database\Eloquent\Builder
+     */
+    public function accessibleProjects()
+    {
+        if ($this->isAnyAdmin()) {
+            // Admin เห็นทุกโครงการ
+            return \App\Models\Project::query();
+        }
+
+        $accessibleDepartmentIds = $this->getAccessibleDepartmentIds();
+
+        // โครงการที่ผู้ใช้สร้าง หรือ อยู่ในหน่วยงานที่เข้าถึงได้
+        return \App\Models\Project::where(function($query) use ($accessibleDepartmentIds) {
+            $query->where('created_by', $this->id);
+            
+            if ($accessibleDepartmentIds->isNotEmpty()) {
+                $query->orWhereIn('department_id', $accessibleDepartmentIds->toArray());
+            }
+        });
+    }
+
+    /* ==================== EXISTING METHODS (unchanged) ==================== */
+
+    /**
+     * Get all available departments
+     */
+    public static function getDepartmentsOptions(): array
+    {
+        return self::DEPARTMENTS;
+    }
+
+    /**
+     * Get all available roles
+     */
+    public static function getRolesOptions(): array
+    {
+        return self::ROLES;
+    }
+
+    /**
+     * Check if department is valid
+     */
+    public static function isValidDepartment(string $department): bool
+    {
+        return array_key_exists($department, self::DEPARTMENTS);
+    }
+
+    /**
+     * Check if role is valid
+     */
+    public static function isValidRole(string $role): bool
+    {
+        return array_key_exists($role, self::ROLES);
+    }
+
+    /**
+     * Create user from KU data
+     */
+    public static function createFromKUData($userInfo, $email, $name, $department): self
+    {
+        $userData = [
+            'name' => $name,
+            'email' => $email,
+            'department' => self::mapKUDepartmentToOption($department),
+            'password' => Hash::make(Str::random(32)),
+            'role' => 'member',
+            'is_active' => true,
+            'email_verified_at' => now(),
+        ];
+
+        // Add KU specific data
+        if (isset($userInfo['uid'])) {
+            $userData['ku_uid'] = $userInfo['uid'];
+        }
+        if (isset($userInfo['faculty-id'])) {
+            $userData['ku_faculty_id'] = $userInfo['faculty-id'];
+        }
+        if (isset($userInfo['position'])) {
+            $userData['ku_position'] = $userInfo['position'];
+        }
+
+        return self::create($userData);
+    }
+
+    /**
+     * Update user from KU data
+     */
+    public function updateFromKUData($userInfo, $name = null, $department = null): void
+    {
+        $updateData = [];
+
+        if ($name && $name !== $this->name) {
+            $updateData['name'] = $name;
+        }
+
+        if ($department && $department !== $this->department) {
+            $updateData['department'] = self::mapKUDepartmentToOption($department);
+        }
+
+        // Update KU specific data
+        if (isset($userInfo['uid']) && $userInfo['uid'] !== $this->ku_uid) {
+            $updateData['ku_uid'] = $userInfo['uid'];
+        }
+        if (isset($userInfo['faculty-id']) && $userInfo['faculty-id'] !== $this->ku_faculty_id) {
+            $updateData['ku_faculty_id'] = $userInfo['faculty-id'];
+        }
+        if (isset($userInfo['position']) && $userInfo['position'] !== $this->ku_position) {
+            $updateData['ku_position'] = $userInfo['position'];
+        }
+
+        if (!empty($updateData)) {
+            $this->update($updateData);
+        }
+    }
+
+    /**
+     * Map KU department to system department
+     */
+    public static function mapKUDepartmentToOption($kuDepartment): string
+    {
+        // Clean the input
+        $cleaned = trim($kuDepartment);
+
+        // Check for exact match first
+        if (self::isValidDepartment($cleaned)) {
+            return $cleaned;
+        }
+
+        // English to Thai mapping
+        $englishToThaiMapping = [
+            'Faculty of Agriculture' => 'คณะเกษตร',
+            'Faculty of Architecture' => 'คณะสถาปัตยกรรมศาสตร์',
+            'Faculty of Forestry' => 'คณะวนศาสตร์',
+            'Faculty of Medicine' => 'คณะพยาบาลศาสตร์',
+            'Faculty of Economics' => 'คณะเศรษฐศาสตร์',
+            'Faculty of Agro-Industry' => 'คณะอุตสาหกรรมเกษตร',
+            'Faculty of Environment' => 'คณะสิ่งแวดล้อม',
+            'Faculty of Business Services' => 'คณะอุตสาหกรรมบริการ',
+            'International College' => 'วิทยาลัยนานาชาติ',
+            'Faculty of Engineering Sriracha' => 'คณะวิศวกรรมศาสตร์ ศรีราชา',
+            'Faculty of Maritime Business' => 'คณะพาณิชยนาวีนานาชาติ',
+            'Faculty of Management' => 'คณะวิทยาการจัดการ',
+            'Faculty of Science Sriracha' => 'คณะวิทยาศาสตร์ ศรีราชา',
+            'Faculty of Economics Sriracha' => 'คณะเศรษฐศาสตร์ ศรีราชา',
+            'Sriracha Campus Office' => 'สำนักงานวิทยาเขตศรีราชา',
+            'Central Office Sriracha' => 'ส่วนกลางวิทยาเขตศรีราชา'
+            
+        ];
+
+        if (isset($englishToThaiMapping[$cleaned])) {
+            return $englishToThaiMapping[$cleaned];
+        }
+
+        // Keyword matching
+        $keywords = [
+            'คณะเกษตร' => 'คณะเกษตร',
+            'คณะสถาปัตยกรรมศาสตร์' => 'คณะสถาปัตยกรรมศาสตร์',
+            'คณะวนศาสตร์' => 'คณะวนศาสตร์',
+            'คณะพยาบาลศาสตร์' => 'คณะพยาบาลศาสตร์',
+            'คณะเศรษฐศาสตร์' => 'คณะเศรษฐศาสตร์',
+            'คณะอุตสาหกรรมเกษตร' => 'คณะอุตสาหกรรมเกษตร',
+            'คณะสิ่งแวดล้อม' => 'คณะสิ่งแวดล้อม',
+            'คณะอุตสาหกรรมบริการ' => 'คณะอุตสาหกรรมบริการ',
+            'วิทยาลัยนานาชาติ' => 'วิทยาลัยนานาชาติ',
+            'คณะวิศวกรรมศาสตร์ ศรีราชา' => 'คณะวิศวกรรมศาสตร์ ศรีราชา',
+            'คณะพาณิชยนาวีนานาชาติ' => 'คณะพาณิชยนาวีนานาชาติ',
+            'คณะวิทยาการจัดการ' => 'คณะวิทยาการจัดการ',
+            'คณะวิทยาศาสตร์ ศรีราชา' => 'คณะวิทยาศาสตร์ ศรีราชา',
+            'คณะเศรษฐศาสตร์ ศรีราชา' => 'คณะเศรษฐศาสตร์ ศรีราชา',
+            'สำนักงานวิทยาเขตศรีราชา' => 'สำนักงานวิทยาเขตศรีราชา',
+            'ส่วนกลางวิทยาเขตศรีราชา' => 'ส่วนกลางวิทยาเขตศรีราชา',
+        ];
+
+        foreach ($keywords as $keyword => $targetDept) {
+            if (str_contains($cleaned, $keyword)) {
+                return $targetDept;
+            }
+        }
+
+        // Log unknown department
+        Log::warning('Unknown department mapping', [
+            'input' => $kuDepartment,
+            'cleaned' => $cleaned,
+        ]);
+
+        // Default fallback
+        return 'อื่นๆ';
+    }
+
+    /**
+     * Check if user is from KU
+     */
+    public function isKUUser(): bool
+    {
+        return !empty($this->ku_uid) ||
+            str_ends_with($this->email, '@ku.ac.th') ||
+            str_ends_with($this->email, '@nontri.ku.ac.th') ||
+            str_ends_with($this->email, '@ku.th');
+    }
+
+    /**
+     * Get KU information
+     */
+    public function getKUInfo(): array
+    {
+        return [
+            'ku_uid' => $this->ku_uid,
+            'ku_faculty_id' => $this->ku_faculty_id,
+            'ku_position' => $this->ku_position,
+            'is_ku_user' => $this->isKUUser(),
+        ];
+    }
+
+    /**
+     * Get short department name (remove "คณะ" prefix)
+     */
+    public function getShortDepartmentAttribute(): string
+    {
+        if (!$this->department) {
+            return '';
+        }
+
+        return str_replace('คณะ', '', $this->department);
+    }
+
+    /**
+     * ตรวจสอบว่าเป็น Admin ใดๆ หรือไม่ (ทั้งระดับระบบและระดับหน่วยงาน)
+     */
+    public function isSuperAdmin(): bool
+    {
+        return $this->role === 'super_admin';
+    }
+
+    public function isAdmin(): bool
+    {
+        return $this->role === 'admin';
+    }
+
+    /**
+     * ตรวจสอบว่าเป็น Admin ใดๆ หรือไม่ (ทั้งระดับระบบและระดับหน่วยงาน)
+     */
+    public function isAnyAdmin(): bool
+    {
+        return $this->isSuperAdmin() || $this->isAdmin();
+    }
+
+    /**
+     * ตรวจสอบว่าเป็น Admin ของหน่วยงานใดหน่วยงานหนึ่งหรือไม่
+     * รวมทั้ง Super Admin และ Department Admin
+     */
+    public function isDepartmentAdmin($departmentId = null): bool
+    {
+        // Super Admin สามารถจัดการทุกหน่วยงานได้
+        if ($this->isSuperAdmin()) {
+            return true;
+        }
+
+        // Department Admin เฉพาะหน่วยงานตน
+        if ($departmentId) {
+            return $this->getRoleInDepartment($departmentId) === 'admin';
+        }
+        
+        return $this->departmentUsers()
+            ->where('role', 'admin')
+            ->where('is_active', true)
+            ->exists();
+    }
+
+    public function isProjectManager(): bool
+    {
+        return $this->role === 'project-manager';
+    }
+    
+    public function isManager(): bool
+    {
+        return $this->role === 'manager';
+    }
+
+    public function isStaff(): bool
+    {
+        return $this->role === 'staff';
+    }
+
+    public function isMember(): bool
+    {
+        return $this->role === 'member';
+    }
+
+    // ==================== MULTIPLE ROLES SUPPORT ====================
+
+    /**
+     * ดึง roles ทั้งหมดจากทุก DepartmentUser ที่ active
+     * รวม roles หลายค่า + role เดี่ยว
+     * @return array
+     */
+    public function getAllUserRoles(): array
+    {
+        $allRoles = collect();
+
+        // เพิ่ม role หลักจาก User table
+        if (!empty($this->role)) {
+            $allRoles->push($this->role);
+        }
+
+        // ดึง roles จากทุก active DepartmentUser
+        try {
+            $departmentUsers = $this->activeDepartmentUsers()->get(['role', 'roles']);
+            
+            foreach ($departmentUsers as $du) {
+                // เพิ่ม role เดี่ยว
+                if (!empty($du->role)) {
+                    $allRoles->push($du->role);
+                }
+                // เพิ่ม roles หลายค่า
+                if (!empty($du->roles) && is_array($du->roles)) {
+                    foreach ($du->roles as $role) {
+                        $allRoles->push($role);
+                    }
+                }
+            }
+        } catch (\Exception $e) {
+            Log::warning('Failed to get department user roles', [
+                'user_id' => $this->id,
+                'error' => $e->getMessage()
+            ]);
+        }
+
+        return $allRoles->unique()->values()->toArray();
+    }
+
+    /**
+     * ตรวจสอบว่า user มี role ใดๆ ในรายการหรือไม่
+     * ใช้สำหรับการตรวจสอบสิทธิ์เข้าถึงเมนู/หน้าต่างๆ
+     * @param array $roles
+     * @return bool
+     */
+    public function hasAnyUserRole(array $roles): bool
+    {
+        $userRoles = $this->getAllUserRoles();
+        return !empty(array_intersect($roles, $userRoles));
+    }
+
+    /**
+     * ตรวจสอบว่า user มี role นี้หรือไม่ (จากทุกแหล่ง)
+     * @param string $role
+     * @return bool
+     */
+    public function hasUserRole(string $role): bool
+    {
+        return in_array($role, $this->getAllUserRoles());
+    }
+
+    /**
+     * ดึง role หลักที่มี priority สูงสุด (จากทุกแหล่ง)
+     * @return string
+     */
+    public function getPrimaryUserRole(): string
+    {
+        $allRoles = $this->getAllUserRoles();
+
+        if (empty($allRoles)) {
+            return $this->role ?? 'member';
+        }
+
+        $highestRole = 'member';
+        $highestPriority = PHP_INT_MAX;
+
+        foreach ($allRoles as $role) {
+            $priority = DepartmentUser::ROLE_PRIORITY[$role] ?? 999;
+            if ($priority < $highestPriority) {
+                $highestPriority = $priority;
+                $highestRole = $role;
+            }
+        }
+
+        return $highestRole;
+    }
+
+    /**
+     * ดึงชื่อแสดงของบทบาททั้งหมด (รองรับหลาย roles)
+     * แปลง role keys เป็นชื่อภาษาไทยที่อ่านได้
+     * @return string
+     */
+    public function getAllUserRolesDisplay(): string
+    {
+        $allRoles = $this->getAllUserRoles();
+        
+        if (empty($allRoles)) {
+            return DepartmentUser::ROLES['member'] ?? 'สมาชิก';
+        }
+
+        $roleNames = array_map(function ($role) {
+            return DepartmentUser::ROLES[$role] ?? $role;
+        }, $allRoles);
+
+        return implode(', ', $roleNames);
+    }
+
+    /**
+     * Scopes
+     */
+    public function scopeActive($query)
+    {
+        return $query->where('is_active', true);
+    }
+
+    public function scopeByRole($query, $role)
+    {
+        return $query->where('role', $role);
+    }
+
+    public function scopeByDepartment($query, string $department)
+    {
+        return $query->where('department', $department);
+    }
+
+    public function scopeKUUsers($query)
+    {
+        return $query->where(function ($q) {
+            $q->whereNotNull('ku_uid')
+                ->orWhere('email', 'like', '%@ku.ac.th')
+                ->orWhere('email', 'like', '%@nontri.ku.ac.th')
+                ->orWhere('email', 'like', '%@ku.th');
+        });
+    }
+
+    /**
+     * Attributes
+     */
+    public function getDisplayNameAttribute(): string
+    {
+        return $this->name ?: $this->email;
+    }
+
+    public function getInitialsAttribute(): string
+    {
+        if (!$this->name) {
+            return strtoupper(substr($this->email, 0, 2));
+        }
+
+        $words = explode(' ', $this->name);
+        if (count($words) >= 2) {
+            return strtoupper(substr($words[0], 0, 1) . substr($words[1], 0, 1));
+        }
+        return strtoupper(substr($this->name, 0, 2));
+    }
+
+    public function getAvatarUrlAttribute(): string
+    {
+        if ($this->avatar && Storage::exists('public/' . $this->avatar)) {
+            return Storage::url($this->avatar);
+        }
+
+        // Generate avatar from UI Avatars service
+        return 'https://ui-avatars.com/api/?' . http_build_query([
+            'name' => $this->display_name,
+            'color' => '16a34a',
+            'background' => 'dcfce7',
+            'size' => 200,
+            'font-size' => 0.6,
+            'rounded' => true,
+            'bold' => true
+        ]);
+    }
+
+    /**
+     * Role management
+     */
+    public function hasRole(string $role): bool
+    {
+        return $this->role === $role;
+    }
+
+    public function hasAnyRole(array $roles): bool
+    {
+        return in_array($this->role, $roles);
+    }
+
+    public function getRoleDisplayAttribute(): string
+    {
+        return self::ROLES[$this->role] ?? $this->role;
+    }
+
+    public function getDepartmentDisplayAttribute(): string
+    {
+        return self::DEPARTMENTS[$this->department] ?? $this->department ?? 'ไม่ระบุหน่วยงาน';
+    }
+
+    /**
+     * Account management
+     */
+    public function isActive(): bool
+    {
+        return $this->is_active;
+    }
+
+    public function activate(): void
+    {
+        $this->update(['is_active' => true]);
+
+        Log::info('User account activated', [
+            'user_id' => $this->id,
+            'email' => $this->email,
+            'activated_at' => now()
+        ]);
+    }
+
+    public function deactivate(): void
+    {
+        $this->update(['is_active' => false]);
+
+        Log::info('User account deactivated', [
+            'user_id' => $this->id,
+            'email' => $this->email,
+            'deactivated_at' => now()
+        ]);
+    }
+
+    /**
+     * Update last login
+     */
+    public function updateLastLogin(): void
+    {
+        $this->update(['last_login_at' => now()]);
+    }
+
+
+    /**
+ * ปรับปรุง getUserDepartment() ให้แม่นยำมากขึ้น
+ */
+public function getUserDepartment()
+{
+    try {
+        // วิธีที่ 1: หาจาก DepartmentUser relation (ลำดับความสำคัญสูงสุด)
+        $departmentUser = $this->activeDepartmentUsers()
+            ->with('department')
+            ->orderByRaw("CASE 
+                WHEN role = 'admin' THEN 1 
+                WHEN role = 'manager' THEN 2 
+                WHEN role = 'project-manager' THEN 3 
+                ELSE 4 END")
+            ->orderByDesc('created_at')
+            ->first();
+
+        if ($departmentUser && $departmentUser->department && $departmentUser->department->is_active) {
+            return $departmentUser->department;
+        }
+
+        // วิธีที่ 2: หาจาก department field ใน users table
+        if (!empty($this->department)) {
+            $department = Department::where('name', $this->department)
+                ->where('is_active', true)
+                ->first();
+                
+            if ($department) {
+                return $department;
+            }
+        }
+
+        // วิธีที่ 3: หาจากการที่สร้างหน่วยงาน
+        $createdDepartment = Department::where('created_by', $this->id)
+            ->where('is_active', true)
+            ->orderByDesc('created_at')
+            ->first();
+
+        return $createdDepartment;
+
+    } catch (\Exception $e) {
+        Log::warning('Failed to get user department', [
+            'user_id' => $this->id,
+            'error' => $e->getMessage()
+        ]);
+        
+        return null;
+    }
+}
+
+/**
+ * ปรับปรุง getUserFacultyId() ให้มีประสิทธิภาพมากขึ้น
+ */
+public function getUserFacultyId(): ?int
+{
+    try {
+        // หาหน่วยงานของ user
+        $userDepartment = $this->getUserDepartment();
+        
+        if (!$userDepartment) {
+            return null;
+        }
+
+        // หาคณะ (หน่วยงานหลัก) ของ user
+        $faculty = $this->getFacultyDepartment($userDepartment);
+        
+        return $faculty ? $faculty->id : null;
+
+    } catch (\Exception $e) {
+        Log::warning('Failed to get user faculty ID', [
+            'user_id' => $this->id,
+            'error' => $e->getMessage()
+        ]);
+        
+        return null;
+    }
+}
+
+/**
+ * ปรับปรุง getDepartmentFacultyId() ให้รองรับ error handling
+ */
+public function getDepartmentFacultyId($departmentId): ?int
+{
+    try {
+        if (!$departmentId) {
+            return null;
+        }
+
+        $department = Department::find($departmentId);
+        
+        if (!$department) {
+            return null;
+        }
+
+        $faculty = $this->getFacultyDepartment($department);
+        
+        return $faculty ? $faculty->id : null;
+
+    } catch (\Exception $e) {
+        Log::warning('Failed to get department faculty ID', [
+            'user_id' => $this->id,
+            'department_id' => $departmentId,
+            'error' => $e->getMessage()
+        ]);
+        
+        return null;
+    }
+}
+
+/**
+ * ปรับปรุง getFacultyDepartment() ให้มี error handling และป้องกัน infinite loop
+ */
+public function getFacultyDepartment($department)
+{
+    if (!$department) {
+        return null;
+    }
+
+    try {
+        // ถ้าเป็นหน่วยงานหลักอยู่แล้ว
+        if ($department->type === 'main') {
+            return $department;
+        }
+
+        // หาหน่วยงานแม่จนถึงหน่วยงานหลัก
+        $current = $department;
+        $maxDepth = 10; // ป้องกัน infinite loop
+        $depth = 0;
+        $visited = collect([$department->id]); // ป้องกัน circular reference
+
+        while ($current && $current->parent_id && $depth < $maxDepth) {
+            // ตรวจสอบ circular reference
+            if ($visited->contains($current->parent_id)) {
+                Log::warning('Circular reference detected in department hierarchy', [
+                    'user_id' => $this->id,
+                    'department_id' => $department->id,
+                    'current_id' => $current->id,
+                    'parent_id' => $current->parent_id,
+                    'visited' => $visited->toArray()
+                ]);
+                break;
+            }
+
+            $parent = Department::find($current->parent_id);
+            if (!$parent || !$parent->is_active) {
+                break;
+            }
+
+            $visited->push($parent->id);
+
+            if ($parent->type === 'main') {
+                return $parent;
+            }
+            
+            $current = $parent;
+            $depth++;
+        }
+
+        Log::info('No faculty department found', [
+            'user_id' => $this->id,
+            'original_department_id' => $department->id,
+            'depth_reached' => $depth
+        ]);
+
+    } catch (\Exception $e) {
+        Log::error('Error finding faculty department', [
+            'user_id' => $this->id,
+            'department_id' => $department->id ?? null,
+            'error' => $e->getMessage()
+        ]);
+    }
+
+    return null;
+}
+
+/**
+ * Helper method สำหรับหาหน่วยงานย่อยทั้งหมด (recursive)
+ */
+private function getAllSubDepartmentIds($facultyId): \Illuminate\Support\Collection
+{
+    $allIds = collect();
+    
+    try {
+        $directSubs = Department::where('parent_id', $facultyId)
+            ->where('is_active', true)
+            ->get();
+        
+        foreach ($directSubs as $sub) {
+            $allIds->push($sub->id);
+            // Recursive สำหรับหน่วยงานย่อยระดับลึกกว่า
+            $deeperSubs = $this->getAllSubDepartmentIds($sub->id);
+            $allIds = $allIds->merge($deeperSubs);
+        }
+        
+    } catch (\Exception $e) {
+        Log::error('Error getting sub-department IDs', [
+            'faculty_id' => $facultyId,
+            'error' => $e->getMessage()
+        ]);
+    }
+    
+    return $allIds;
+}
+
+/**
+ * ปรับปรุง isInSameFaculty() ให้เข้มงวดมากขึ้น
+ */
+public function isInSameFaculty($targetDepartmentId): bool
+{
+    if (!$targetDepartmentId) {
+        return false;
+    }
+
+    try {
+        // หาคณะของผู้ใช้
+        $userFacultyId = $this->getUserFacultyId();
+        
+        if (!$userFacultyId) {
+            Log::info('User has no faculty for comparison', [
+                'user_id' => $this->id,
+                'target_department_id' => $targetDepartmentId
+            ]);
+            return false;
+        }
+
+        // หาคณะของ target department
+        $targetFacultyId = $this->getDepartmentFacultyId($targetDepartmentId);
+        
+        if (!$targetFacultyId) {
+            Log::info('Target department has no faculty', [
+                'user_id' => $this->id,
+                'target_department_id' => $targetDepartmentId
+            ]);
+            return false;
+        }
+
+        $isSameFaculty = $userFacultyId === $targetFacultyId;
+        
+        Log::debug('Faculty comparison result', [
+            'user_id' => $this->id,
+            'user_faculty_id' => $userFacultyId,
+            'target_department_id' => $targetDepartmentId,
+            'target_faculty_id' => $targetFacultyId,
+            'is_same_faculty' => $isSameFaculty
+        ]);
+
+        return $isSameFaculty;
+
+    } catch (\Exception $e) {
+        Log::error('Error comparing faculties', [
+            'user_id' => $this->id,
+            'target_department_id' => $targetDepartmentId,
+            'error' => $e->getMessage()
+        ]);
+        
+        return false;
+    }
+}
+
+    /**
+     * ปรับปรุง getAccessibleDepartmentIds() ให้จำกัดตามคณะอย่างเข้มงวด
+     */
+    public function getAccessibleDepartmentIds(): \Illuminate\Support\Collection
+    {
+        // Super Admin เห็นทุกหน่วยงาน
+        if ($this->isSuperAdmin()) {
+            try {
+                return Department::where('is_active', true)->pluck('id');
+            } catch (\Exception $e) {
+                Log::warning('Failed to get all departments for super admin', [
+                    'user_id' => $this->id,
+                    'error' => $e->getMessage()
+                ]);
+                return collect();
+            }
+        }
+
+        // Admin/Manager - เข้าถึงได้ในคณะของตน
+        if ($this->isAdmin() || $this->isManager()) {
+            $manageableIds = $this->getManageableDepartmentIdsInFaculty();
+            return collect($manageableIds);
+        }
+
+        // ผู้ใช้ทั่วไป - เข้าถึงได้เฉพาะในคณะเดียวกัน
+        try {
+            $userDepartment = $this->getUserDepartment();
+            if (!$userDepartment) {
+                Log::info('User has no department', ['user_id' => $this->id]);
+                return collect();
+            }
+
+            $faculty = $this->getFacultyDepartment($userDepartment);
+            if (!$faculty) {
+                // ถ้าไม่มีคณะ ให้เข้าถึงได้เฉพาะหน่วยงานตัวเอง
+                Log::info('User department has no faculty', [
+                    'user_id' => $this->id,
+                    'department_id' => $userDepartment->id
+                ]);
+                return collect([$userDepartment->id]);
+            }
+
+            // ดึงหน่วยงานทั้งหมดในคณะ
+            $allIds = collect([$faculty->id]);
+            
+            if (method_exists($faculty, 'getAllDescendants')) {
+                $subDepartments = $faculty->getAllDescendants();
+                $subIds = $subDepartments->pluck('id');
+                $allIds = $allIds->merge($subIds);
+            } else {
+                // Fallback method
+                $allIds = $allIds->merge($this->getAllSubDepartmentIds($faculty->id));
+            }
+            
+            $result = $allIds->unique()->values();
+            
+            Log::debug('Accessible departments calculated for regular user', [
+                'user_id' => $this->id,
+                'faculty_id' => $faculty->id,
+                'accessible_count' => $result->count()
+            ]);
+            
+            return $result;
+
+        } catch (\Exception $e) {
+            Log::warning('Failed to get accessible department IDs', [
+                'user_id' => $this->id,
+                'error' => $e->getMessage()
+            ]);
+            
+            return collect();
+        }
+    }
+
+    /**
+     * เพิ่ม method สำหรับ debug การเข้าถึงแบบ faculty-based
+     */
+    public function debugFacultyAccess(): array
+    {
+        try {
+            $userDepartment = $this->getUserDepartment();
+            $userFaculty = $userDepartment ? $this->getFacultyDepartment($userDepartment) : null;
+            
+            return [
+                'user_id' => $this->id,
+                'user_role' => $this->role,
+                'is_super_admin' => $this->isSuperAdmin(),
+                'is_admin' => $this->isAdmin(),
+                'user_department' => $userDepartment ? [
+                    'id' => $userDepartment->id,
+                    'name' => $userDepartment->name,
+                    'type' => $userDepartment->type,
+                ] : null,
+                'user_faculty' => $userFaculty ? [
+                    'id' => $userFaculty->id,
+                    'name' => $userFaculty->name,
+                    'type' => $userFaculty->type,
+                ] : null,
+                'manageable_department_ids' => $this->getManageableDepartmentIdsInFaculty(),
+                'accessible_department_ids' => $this->getAccessibleDepartmentIds()->toArray(),
+                'department_relationships' => $this->activeDepartmentUsers()
+                    ->with('department')
+                    ->get()
+                    ->map(function($du) {
+                        return [
+                            'department_id' => $du->department_id,
+                            'department_name' => $du->department->name ?? 'Unknown',
+                            'role' => $du->role,
+                            'position' => $du->position,
+                        ];
+                    })->toArray(),
+            ];
+            
+        } catch (\Exception $e) {
+            return [
+                'error' => 'Failed to debug faculty access: ' . $e->getMessage(),
+                'user_id' => $this->id,
+            ];
+        }
+    }
+
+    /**
+     * ตรวจสอบว่า user สามารถจัดการหน่วยงานเฉพาะได้หรือไม่ (Enhanced version)
+     */
+    public function canManageDepartmentEnhanced($departmentId): bool
+    {
+        if (!$departmentId) {
+            return false;
+        }
+
+        // Super Admin จัดการได้ทุกอย่าง
+        if ($this->isSuperAdmin()) {
+            return true;
+        }
+
+        // Admin ธรรมดา - ตรวจสอบตามคณะ
+        if ($this->isAdmin()) {
+            return $this->canManageInFaculty($departmentId);
+        }
+
+        // ผู้ใช้ทั่วไป - ตรวจสอบสิทธิ์ในหน่วยงาน
+        $role = $this->getRoleInDepartment($departmentId);
+        return in_array($role, ['admin', 'manager', 'project-manager']);
+    }
+
+    /**
+     * ตรวจสอบว่าสามารถดูข้อมูลหน่วยงานได้หรือไม่ (Enhanced version)
+     */
+    public function canViewDepartmentData($departmentId): bool
+    {
+        if (!$departmentId) {
+            return false;
+        }
+
+        // Super Admin ดูได้ทุกอย่าง
+        if ($this->isSuperAdmin()) {
+            return true;
+        }
+
+        // Admin ธรรมดา - ดูได้ในคณะของตน
+        if ($this->isAdmin()) {
+            return $this->isInSameFaculty($departmentId);
+        }
+
+        // ผู้ใช้ทั่วไป - ดูได้เฉพาะในคณะเดียวกัน
+        $accessibleIds = $this->getAccessibleDepartmentIds();
+        return $accessibleIds->contains($departmentId);
+    }
+
+    /**
+     * เพิ่ม method สำหรับทดสอบการเข้าถึงระหว่าง users
+     */
+    public function canAccessSameFacultyAs(User $otherUser): bool
+    {
+        if ($this->isSuperAdmin() || $otherUser->isSuperAdmin()) {
+            return true;
+        }
+
+        $thisFacultyId = $this->getUserFacultyId();
+        $otherFacultyId = $otherUser->getUserFacultyId();
+
+        if (!$thisFacultyId || !$otherFacultyId) {
+            return false;
+        }
+
+        return $thisFacultyId === $otherFacultyId;
+    }
+
+
+
+    /* ==================== DEBUGGING & UTILITY METHODS ==================== */
+
+    /**
+     * Debug ข้อมูลการเข้าถึงหน่วยงาน (สำหรับการแก้ไขปัญหา)
+     * 
+     * @param int|null $departmentId ID ของหน่วยงานที่ต้องการตรวจสอบ
+     * @return array
+     */
+    public function debugDepartmentAccess($departmentId = null): array
+    {
+        $debug = [
+            'user_info' => [
+                'id' => $this->id,
+                'name' => $this->name,
+                'email' => $this->email,
+                'role' => $this->role,
+                'is_super_admin' => $this->isSuperAdmin(),
+                'is_admin' => $this->isAdmin(),
+                'is_any_admin' => $this->isAnyAdmin(),
+            ],
+            'department_relationships' => []
+        ];
+
+        // ตรวจสอบ pivot table relationships
+        if (method_exists($this, 'departmentUsers')) {
+            $departmentUsers = $this->departmentUsers()->with('department')->get();
+            $debug['department_relationships']['pivot_table'] = $departmentUsers->map(function($du) {
+                return [
+                    'department_id' => $du->department_id,
+                    'department_name' => $du->department->name ?? 'Unknown',
+                    'role' => $du->role,
+                    'is_active' => $du->is_active,
+                    'position' => $du->position,
+                ];
+            })->toArray();
+        }
+
+        // ตรวจสอบ direct foreign key
+        if (isset($this->attributes['department_id'])) {
+            $debug['department_relationships']['direct_fk'] = [
+                'department_id' => $this->department_id,
+                'department_name' => $this->department ?? 'Not loaded'
+            ];
+        }
+
+        // ตรวจสอบ department field
+        if (isset($this->attributes['department'])) {
+            $debug['department_relationships']['department_field'] = $this->department;
+        }
+
+        // ตรวจสอบการเข้าถึงหน่วยงานเฉพาะ
+        if ($departmentId) {
+            $debug['specific_department_check'] = [
+                'department_id' => $departmentId,
+                'can_access_via_belongsToDepartment' => $this->belongsToDepartment($departmentId),
+                'can_access_via_enhanced' => $this->belongsToDepartmentEnhanced($departmentId),
+            ];
+        }
+
+        $debug['accessible_department_ids'] = $this->getAccessibleDepartmentIds()->toArray();
+
+        return $debug;
+    }
+
+    /**
+     * ตรวจสอบและแสดงข้อมูลการเข้าถึงโครงการ
+     * 
+     * @param Project $project โครงการที่ต้องการตรวจสอบ
+     * @return array
+     */
+    public function debugProjectAccess($project): array
+    {
+        return [
+            'user_id' => $this->id,
+            'project_id' => $project->id,
+            'project_department_id' => $project->department_id,
+            'is_owner' => $project->created_by === $this->id,
+            'is_super_admin' => $this->isSuperAdmin(),
+            'is_admin' => $this->isAdmin(),
+            'belongs_to_department' => $this->belongsToDepartment($project->department_id),
+            'belongs_to_department_enhanced' => $this->belongsToDepartmentEnhanced($project->department_id),
+            'can_access_project' => $this->canAccessProject($project),
+            'role_in_department' => $this->getRoleInDepartment($project->department_id),
+            'department_debug' => $this->debugDepartmentAccess($project->department_id)
+        ];
+    }
+
+    /**
+     * Model events
+     */
+    protected static function boot()
+    {
+        parent::boot();
+
+        // Log user creation
+        static::created(function ($user) {
+            Log::info('New user created', [
+                'user_id' => $user->id,
+                'email' => $user->email,
+                'name' => $user->name,
+                'role' => $user->role,
+                'department' => $user->department,
+                'is_ku_user' => $user->isKUUser(),
+                'created_at' => $user->created_at
+            ]);
+        });
+
+        // Log user updates
+        static::updated(function ($user) {
+            $changedAttributes = $user->getChanges();
+
+            if (isset($changedAttributes['password'])) {
+                Log::info('User password updated', [
+                    'user_id' => $user->id,
+                    'email' => $user->email,
+                    'updated_at' => now()
+                ]);
+            }
+
+            if (isset($changedAttributes['role'])) {
+                Log::info('User role changed', [
+                    'user_id' => $user->id,
+                    'email' => $user->email,
+                    'old_role' => $user->getOriginal('role'),
+                    'new_role' => $user->role,
+                    'updated_at' => now()
+                ]);
+            }
+
+            if (isset($changedAttributes['is_active'])) {
+                Log::info('User status changed', [
+                    'user_id' => $user->id,
+                    'email' => $user->email,
+                    'old_status' => $user->getOriginal('is_active') ? 'active' : 'inactive',
+                    'new_status' => $user->is_active ? 'active' : 'inactive',
+                    'updated_at' => now()
+                ]);
+            }
+        });
+
+        // Log user deletion
+        static::deleted(function ($user) {
+            Log::warning('User deleted', [
+                'user_id' => $user->id,
+                'email' => $user->email,
+                'name' => $user->name,
+                'deleted_at' => now()
+            ]);
+        });
+    }
+
+    /* ==================== NAME MATCHING METHODS ==================== */
+
+    /**
+     * คำนำหน้าชื่อที่รู้จักในระบบ
+     */
+    private static function getNamePrefixes(): array
+    {
+        return [
+            'นาย', 'นาง', 'นางสาว',
+            'ดร.', 'ผศ.ดร.', 'รศ.ดร.', 'ศ.ดร.',
+            'ศ.', 'ผศ.', 'รศ.',
+            'ดร.', 'รศ. ดร.', 'ผศ. ดร.', 'ศ. ดร.',
+            'พล.อ.', 'พล.ต.', 'พล.ร.', 'พล.อ.อ.', 'พล.อ.ท.', 'พล.อ.ต.',
+            'พล.ต.อ.', 'พล.ต.ท.', 'พล.ต.ต.',
+            'พล.ร.อ.', 'พล.ร.ท.', 'พล.ร.ต.',
+            'นพ.', 'พญ.', 'ทพ.', 'ทพญ.', 'สพ.', 'สพญ.',
+            'คุณ', 'ครู', 'อาจารย์'
+        ];
+    }
+
+    /**
+     * ลบคำนำหน้าออกจากชื่อ
+     */
+    public static function removeNamePrefix(string $name): string
+    {
+        $name = trim($name);
+        
+        if (empty($name)) {
+            return '';
+        }
+        
+        $prefixes = self::getNamePrefixes();
+        
+        // เรียงจากยาวไปสั้น เพื่อจับคำนำหน้าที่ยาวก่อน
+        usort($prefixes, function($a, $b) {
+            return strlen($b) - strlen($a);
+        });
+        
+        // ลองลบ prefix ซ้ำจนกว่าจะไม่มี prefix ให้ลบแล้ว
+        $maxIterations = 5; // ป้องกัน infinite loop
+        $iteration = 0;
+        
+        while ($iteration < $maxIterations) {
+            $originalName = $name;
+            
+            foreach ($prefixes as $prefix) {
+                if (str_starts_with($name, $prefix)) {
+                    $nameWithoutPrefix = trim(substr($name, strlen($prefix)));
+                    
+                    // ถ้าลบ prefix แล้วไม่มีอะไรเหลือ ให้คืนค่าเดิม
+                    if (empty($nameWithoutPrefix)) {
+                        return $name; // คืนค่าชื่อเดิมที่มี prefix
+                    }
+                    
+                    $name = $nameWithoutPrefix;
+                    break; // ออกจาก foreach และลองรอบใหม่
+                }
+            }
+            
+            // ถ้าไม่มีการเปลี่ยนแปลง แสดงว่าไม่มี prefix ให้ลบแล้ว
+            if ($name === $originalName) {
+                break;
+            }
+            
+            $iteration++;
+        }
+        
+        return $name;
+    }
+
+    /**
+     * เปรียบเทียบชื่อโดยไม่สนใจคำนำหน้า
+     */
+    public static function namesMatch(string $name1, string $name2): bool
+    {
+        $cleanName1 = self::removeNamePrefix(trim($name1));
+        $cleanName2 = self::removeNamePrefix(trim($name2));
+        
+        // เปรียบเทียบแบบ case-insensitive และลบช่องว่างเพิ่มเติม
+        $normalizedName1 = preg_replace('/\s+/', ' ', strtolower($cleanName1));
+        $normalizedName2 = preg_replace('/\s+/', ' ', strtolower($cleanName2));
+        
+        return $normalizedName1 === $normalizedName2;
+    }
+
+    /**
+     * ค้นหาผู้ใช้โดยจับคู่ชื่อ (ไม่สนใจคำนำหน้า) และหน่วยงาน
+     * พร้อมตรวจสอบอีเมลเป็นตัวเลือกเสริม
+     */
+    public static function findUserByNameAndDepartment(string $name, string $department, ?string $email = null): ?User
+    {
+        Log::info('Searching for user by name and department', [
+            'search_name' => $name,
+            'search_department' => $department,
+            'search_email' => $email
+        ]);
+
+        // ลบคำนำหน้าจากชื่อที่ต้องการค้นหา
+        $cleanSearchName = self::removeNamePrefix($name);
+        
+        try {
+            // หา department_id
+            $departmentRecord = Department::where('name', $department)->first();
+            
+            if (!$departmentRecord) {
+                Log::warning('Department not found', ['department' => $department]);
+                
+                // ลองหาด้วย code หรือคล้ายกัน
+                $departmentRecord = Department::where('code', $department)
+                    ->orWhere('name', 'LIKE', "%{$department}%")
+                    ->first();
+                
+                if (!$departmentRecord) {
+                    Log::warning('Department still not found after fuzzy search', ['department' => $department]);
+                    // ไม่ return null ทันที แต่ลองหาโดยไม่ระบุหน่วยงาน
+                }
+            }
+
+            // ค้นหาผู้ใช้ในหน่วยงานนั้น (หากหาหน่วยงานเจอ)
+            $users = collect();
+            
+            if ($departmentRecord) {
+                // ค้นหาผู้ใช้ที่มี relation กับหน่วยงาน
+                $usersFromPivot = User::whereHas('departments', function($query) use ($departmentRecord) {
+                    $query->where('departments.id', $departmentRecord->id);
+                })->get();
+                
+                // ค้นหาผู้ใช้ที่มี department field ตรงกัน
+                $usersFromField = User::where('department', $department)->get();
+                
+                $users = $usersFromPivot->merge($usersFromField)->unique('id');
+                
+                Log::info('Found users in department', [
+                    'department_id' => $departmentRecord->id,
+                    'users_from_pivot' => $usersFromPivot->count(),
+                    'users_from_field' => $usersFromField->count(),
+                    'total_unique' => $users->count()
+                ]);
+            } else {
+                // หากไม่เจอหน่วยงาน ให้ค้นหาจากผู้ใช้ทั้งหมดที่มี department field ตรงกัน
+                $users = User::where('department', $department)->get();
+                
+                Log::info('Searching without department record', [
+                    'users_found' => $users->count()
+                ]);
+            }
+
+            // ตรวจสอบการจับคู่ชื่อ
+            foreach ($users as $user) {
+                if (self::namesMatch($user->name, $name)) {
+                    Log::info('Name match found', [
+                        'existing_user_id' => $user->id,
+                        'existing_name' => $user->name,
+                        'search_name' => $name,
+                        'clean_existing' => self::removeNamePrefix($user->name),
+                        'clean_search' => $cleanSearchName
+                    ]);
+                    return $user;
+                }
+            }
+
+            // ถ้ามี email ให้ลองหาด้วย email เป็นตัวเลือกสุดท้าย
+            if ($email) {
+                $userByEmail = User::where('email', $email)->first();
+                if ($userByEmail) {
+                    Log::info('User found by email fallback', [
+                        'user_id' => $userByEmail->id,
+                        'email' => $email
+                    ]);
+                    return $userByEmail;
+                }
+            }
+
+        } catch (\Exception $e) {
+            Log::error('Error in findUserByNameAndDepartment', [
+                'error' => $e->getMessage(),
+                'file' => $e->getFile(),
+                'line' => $e->getLine(),
+                'search_name' => $name,
+                'search_department' => $department
+            ]);
+            
+            // ในกรณีที่เกิด error ให้ลองหาแบบง่าย ๆ
+            try {
+                $simpleUsers = User::where('department', $department)->get();
+                foreach ($simpleUsers as $user) {
+                    if (self::namesMatch($user->name, $name)) {
+                        Log::info('Name match found via fallback method', [
+                            'user_id' => $user->id,
+                            'existing_name' => $user->name
+                        ]);
+                        return $user;
+                    }
+                }
+            } catch (\Exception $fallbackError) {
+                Log::error('Fallback search also failed', [
+                    'error' => $fallbackError->getMessage()
+                ]);
+            }
+        }
+
+        Log::info('No matching user found');
+        return null;
+    }
+
+    /**
+     * ค้นหาผู้ใช้ด้วยหลายเกณฑ์ (สำหรับ KU ALL LOGIN)
+     * ลำดับความสำคัญ: email -> name+department -> name เท่านั้น -> similar email
+     */
+    public static function findExistingKUUser(string $email, string $name, string $department): ?User
+    {
+        Log::info('Searching for existing KU user', [
+            'email' => $email,
+            'name' => $name,
+            'department' => $department
+        ]);
+
+        // 1. ลองหาด้วย email ก่อน (วิธีหลัก)
+        $userByEmail = User::where('email', $email)->first();
+        if ($userByEmail) {
+            Log::info('User found by email', ['user_id' => $userByEmail->id]);
+            return $userByEmail;
+        }
+
+        // 2. ลองหาด้วยชื่อ + หน่วยงาน
+        $userByNameDept = self::findUserByNameAndDepartment($name, $department);
+        if ($userByNameDept) {
+            Log::info('User found by name and department', ['user_id' => $userByNameDept->id]);
+            return $userByNameDept;
+        }
+
+        // 3. ลองหาด้วยชื่อเท่านั้น (ในกรณีที่มีการเปลี่ยนหน่วยงาน)
+        // ✅ ปรับปรุง: ใช้ chunk เพื่อความประหยัดหน่วยความจำ
+        $foundUser = null;
+        User::chunk(200, function ($users) use ($name, &$foundUser) {
+            foreach ($users as $user) {
+                if (self::namesMatch($user->name, $name)) {
+                    $foundUser = $user;
+                    return false; // หยุด chunk ทันทีที่เจอ
+                }
+            }
+        });
+
+        if ($foundUser) {
+            Log::info('User found by name only (different department)', [
+                'user_id' => $foundUser->id,
+                'existing_department' => $foundUser->department
+            ]);
+            return $foundUser;
+        }
+
+        // 4. 🔥 ลองหาด้วย username ที่คล้ายกัน (สำหรับกรณี email domain ต่างกัน)
+        // เช่น kantarasukan.s@ku.th vs fagikkso@ku.ac.th
+        $emailPrefix = explode('@', $email)[0]; // ได้ fagikkso
+        $similarUsers = User::where('email', 'LIKE', '%' . $emailPrefix . '%')
+                           ->orWhere('email', 'LIKE', '%' . str_replace('.', '', $emailPrefix) . '%')
+                           ->get();
+                           
+        foreach ($similarUsers as $user) {
+            if (self::namesMatch($user->name, $name)) {
+                Log::info('User found by similar email pattern and name match', [
+                    'user_id' => $user->id,
+                    'existing_email' => $user->email,
+                    'ku_email' => $email,
+                    'name_match' => true
+                ]);
+                return $user;
+            }
+        }
+
+        // 5. 🔥 ลองหาด้วยการเปรียบเทียบ username ใน email
+        // กรณีที่ KU ให้ username ใหม่แต่ชื่อจริงเดียวกัน
+        $existingUsers = User::where('department', $department)
+                            ->orWhereHas('departments', function($query) use ($department) {
+                                $query->where('name', $department);
+                            })
+                            ->get();
+                            
+        foreach ($existingUsers as $user) {
+            if (self::namesMatch($user->name, $name)) {
+                // เช่น kantarasukan.s@ku.th และ fagikkso@ku.ac.th แต่ชื่อ "กัณฑลสุกานต์ สมบูรณ์" ตรงกัน
+                Log::info('User found by name in same department (different username)', [
+                    'user_id' => $user->id,
+                    'existing_email' => $user->email,
+                    'ku_email' => $email,
+                    'existing_name' => $user->name,
+                    'ku_name' => $name
+                ]);
+                return $user;
+            }
+        }
+
+        Log::info('No existing user found');
+        return null;
+    }
+
+    /**
+     * 🔥 Fixed version of accessible departments for filter
+     * Returns Collection of Department models
+     * Stricter logic: Non-Admins only see explicitly assigned departments
+     */
+    public function getAccessibleDepartmentsForFilterFixed()
+    {
+        // 1. Super Admin sees all
+        if ($this->isSuperAdmin()) {
+            return Department::where('is_active', true)
+                ->orderBy('type', 'desc')
+                ->orderBy('name')
+                ->get();
+        }
+
+        // 2. Admin/Manager: Check if they manage a MAIN department
+        $managesMainDept = $this->departmentUsers()
+            ->where('is_active', true)
+            ->whereIn('role', ['admin', 'manager'])
+            ->whereHas('department', function ($q) {
+                $q->where('type', 'main');
+            })
+            ->exists();
+
+        if ($managesMainDept) {
+            // If they manage a main department, they see EVERYTHING in that faculty
+            $deptIds = $this->getManageableDepartmentIdsInFaculty();
+            return Department::whereIn('id', $deptIds)
+                ->where('is_active', true)
+                ->orderBy('name')
+                ->get();
+        }
+
+        // 3. Project Manager / Staff / General User
+        // Only see departments they are actively assigned to
+        // Do NOT expand to entire faculty
+        $deptIds = $this->activeDepartmentUsers()
+            ->pluck('department_id')
+            ->unique()
+            ->toArray();
+
+        // Also include sub_department_id (e.g. สถานีวิจัยดอยปุย)
+        $subDeptIds = $this->activeDepartmentUsers()
+            ->whereNotNull('sub_department_id')
+            ->pluck('sub_department_id')
+            ->unique()
+            ->toArray();
+
+        $deptIds = array_unique(array_merge($deptIds, $subDeptIds));
+            
+        // Fallback to single department field if no pivot records
+        if (empty($deptIds) && !empty($this->department)) {
+            $dept = Department::where('name', $this->department)->first();
+            if ($dept) {
+                $deptIds[] = $dept->id;
+            }
+        }
+
+        // Also include the department they created (if any)
+        $createdDept = Department::where('created_by', $this->id)->first();
+        if ($createdDept) {
+            $deptIds[] = $createdDept->id;
+        }
+
+        return Department::whereIn('id', array_unique($deptIds))
+            ->where('is_active', true)
+            ->orderBy('name')
+            ->get();
+    }
+}

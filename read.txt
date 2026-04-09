@@ -1,0 +1,28 @@
+คำสั่ง เพื่อรัน seeder
+
+ลำดับการรัน Seed
+
+# ─── กลุ่ม 1: ไม่มี FK dependency ───────────────────────────────
+bun run src/seed-organizations.ts     # organizations (ต้องก่อนสุด)
+bun run src/seed-users.ts             # users (ต้องก่อนสุด)
+bun run src/seed-sdgs.ts              # sdgs (self-ref เท่านั้น)
+bun run src/seed-budget-supports.ts   # budget_supports
+
+# ─── กลุ่ม 2: FK → organizations / users / budget_supports ───────
+bun run src/seed-affiliations.ts          # user_affiliations → users + organizations
+bun run src/seed-strategies.ts            # strategies → users (nullable)
+bun run src/seed-strategic-departments.ts # strategic_departments → organizations + users
+bun run src/seed-budget-types.ts          # budget_types → budget_supports
+
+# ─── กลุ่ม 3: FK → strategies / budget_types ─────────────────────
+bun run src/seed-budget-groups.ts     # budget_groups → budget_types
+# (strategic_tactics อยู่ใน seed-strategies.ts แล้ว)
+# (strategic_department_tactics อยู่ใน seed-strategic-departments.ts แล้ว)
+
+# ─── กลุ่ม 4: FK → budget_groups ─────────────────────────────────
+bun run src/seed-expense-details.ts   # expense_details → budget_groups
+
+# ─── กลุ่ม 5: clone จาก expense_details ─────────────────────────
+bun run src/clone-expense-details.ts  # budget_expense_details ← clone จาก expense_details
+bun run src/clone-budget_subsidies.ts
+bun run src/clone-budget_subsidy_types.ts

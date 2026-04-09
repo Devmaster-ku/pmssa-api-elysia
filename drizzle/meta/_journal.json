@@ -1,0 +1,76 @@
+{
+  "version": "7",
+  "dialect": "mysql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "5",
+      "when": 1772528421263,
+      "tag": "0000_tense_lorna_dane",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "5",
+      "when": 1773057921713,
+      "tag": "0001_restructure_user_model",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "5",
+      "when": 1742342400000,
+      "tag": "0002_add_sub_dep_id_to_affiliations",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "5",
+      "when": 1773896002360,
+      "tag": "0003_busy_blob",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "5",
+      "when": 1774000000000,
+      "tag": "0004_add_fiscal_plan",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "5",
+      "when": 1742342400005,
+      "tag": "0005_add_dean_strategies",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "5",
+      "when": 1773965826247,
+      "tag": "0006_sudden_patriot",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "5",
+      "when": 1773971119628,
+      "tag": "0007_steep_terror",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "5",
+      "when": 1774011464641,
+      "tag": "0008_long_bishop",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "5",
+      "when": 1774047300647,
+      "tag": "0009_restructure_budget_expense_details",
+      "breakpoints": true
+    }
+  ]
+}

@@ -1,0 +1,11 @@
+# 1. budget_supports (ก่อนสุด)
+bun run src/seed-budget-supports.ts
+
+# 2. budget_types (depends on budget_supports)
+bun run src/seed-budget-types.ts
+
+# 3. budget_groups (depends on budget_types)
+bun run src/seed-budget-groups.ts
+
+# 4. expense_details (depends on budget_groups)
+bun run src/seed-expense-details.ts
