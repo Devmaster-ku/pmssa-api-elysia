@@ -223,6 +223,7 @@ export const userRoutes = new Elysia({ prefix: "/api/users" })
           await db.insert(userAffiliations).values({
             userId: newUserId,
             orgId: body.orgId,
+            subDepId: body.subDepId ?? null,
             role: (body.role ?? "staff") as any,
             positionTitle: body.positionTitle ?? null,
             isPrimary: true,
@@ -246,6 +247,7 @@ export const userRoutes = new Elysia({ prefix: "/api/users" })
         phone: t.Optional(t.String()),
         password: t.Optional(t.String({ minLength: 6 })),
         orgId: t.Optional(t.Number()),
+        subDepId: t.Optional(t.Number()),
         role: t.Optional(t.String()),
         positionTitle: t.Optional(t.String()),
       }),
@@ -400,6 +402,7 @@ export const adminRoutes = new Elysia({ prefix: "/api/admin" })
       const [inserted] = await db.insert(userAffiliations).values({
         userId: body.userId,
         orgId: body.orgId,
+        subDepId: body.subDepId ?? null,
         role: body.role as any,
         positionTitle: body.positionTitle ?? null,
         isPrimary: body.isPrimary ?? false,
@@ -416,6 +419,7 @@ export const adminRoutes = new Elysia({ prefix: "/api/admin" })
       body: t.Object({
         userId: t.Number(),
         orgId: t.Number(),
+        subDepId: t.Optional(t.Nullable(t.Number())),
         role: t.String(),
         positionTitle: t.Optional(t.String()),
         isPrimary: t.Optional(t.Boolean()),
@@ -470,6 +474,67 @@ export const adminRoutes = new Elysia({ prefix: "/api/admin" })
         positionTitle: t.Optional(t.String()),
         isPrimary: t.Optional(t.Boolean()),
         isActive: t.Optional(t.Boolean()),
+      }),
+    }
+  )
+
+  // -----------------------------------------------
+  // PATCH /api/admin/affiliations/:id — แก้ไขสังกัด (รองรับ orgId)
+  // -----------------------------------------------
+  .patch(
+    "/affiliations/:id",
+    async ({ params, body, auth, set }) => {
+      if (auth.role !== "super_admin" && auth.role !== "org_admin") {
+        set.status = 403;
+        return { success: false, message: "ไม่มีสิทธิ์ดำเนินการ" };
+      }
+
+      const affiliation = await db.query.userAffiliations.findFirst({
+        where: eq(userAffiliations.id, Number(params.id)),
+      });
+
+      if (!affiliation) {
+        set.status = 404;
+        return { success: false, message: "ไม่พบสังกัดที่ระบุ" };
+      }
+
+      // ตรวจสอบ scope
+      if (auth.role === "org_admin" && auth.orgId) {
+        const { orgIds } = await getAccessibleOrgIds(auth.role, auth.orgId);
+        if (!orgIds.includes(affiliation.orgId)) {
+          set.status = 403;
+          return { success: false, message: "ไม่มีสิทธิ์แก้ไขสังกัดนี้" };
+        }
+        // ตรวจสอบว่า orgId ใหม่อยู่ใน scope ที่เข้าถึงได้
+        if (body.orgId !== undefined && !orgIds.includes(body.orgId)) {
+          set.status = 403;
+          return { success: false, message: "ไม่มีสิทธิ์กำหนดสังกัดไปยังหน่วยงานนี้" };
+        }
+      }
+
+      const updateData: any = {};
+      if (body.role !== undefined) updateData.role = body.role;
+      if (body.positionTitle !== undefined) updateData.positionTitle = body.positionTitle;
+      if (body.isPrimary !== undefined) updateData.isPrimary = body.isPrimary;
+      if (body.isActive !== undefined) updateData.isActive = body.isActive;
+      if (body.orgId !== undefined) updateData.orgId = body.orgId;
+      if (body.subDepId !== undefined) updateData.subDepId = body.subDepId; // null = ล้างหน่วยงานย่อย
+
+      await db
+        .update(userAffiliations)
+        .set(updateData)
+        .where(eq(userAffiliations.id, Number(params.id)));
+
+      return { success: true, message: "แก้ไขสังกัดสำเร็จ" };
+    },
+    {
+      body: t.Object({
+        role: t.Optional(t.String()),
+        positionTitle: t.Optional(t.String()),
+        isPrimary: t.Optional(t.Boolean()),
+        isActive: t.Optional(t.Boolean()),
+        orgId: t.Optional(t.Number()),
+        subDepId: t.Optional(t.Nullable(t.Number())),
       }),
     }
   )

@@ -7,6 +7,9 @@ import { strategyRoutes } from "./routes/strategies";
 import { settingsRoutes } from "./routes/settings";
 import { maintenanceRoutes } from "./routes/maintenance";
 import { sdgRoutes } from "./routes/sdgs";
+import { projectRoutes } from "./routes/projects";
+import { projectImplementationRoutes } from "./routes/projectImplementation";
+import { provinceRoutes } from "./routes/provinces";
 import { authMiddleware } from "./middleware/auth";
 
 const app = new Elysia()
@@ -27,6 +30,9 @@ const app = new Elysia()
   .use(settingsRoutes)
   .use(maintenanceRoutes)
   .use(sdgRoutes)
+  .use(projectRoutes)
+  .use(projectImplementationRoutes)
+  .use(provinceRoutes)
   .listen(3000);
 
 console.log(

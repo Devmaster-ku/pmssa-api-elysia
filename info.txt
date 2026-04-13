@@ -9,3 +9,7 @@ bun run src/seed-budget-groups.ts
 
 # 4. expense_details (depends on budget_groups)
 bun run src/seed-expense-details.ts
+
+# 5. project && project_detail
+bun run seed:projects
+bun run seed:project-details

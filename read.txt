@@ -3,8 +3,9 @@
 ลำดับการรัน Seed
 
 # ─── กลุ่ม 1: ไม่มี FK dependency ───────────────────────────────
-bun run src/seed-organizations.ts     # organizations (ต้องก่อนสุด)
-bun run src/seed-users.ts             # users (ต้องก่อนสุด)
+bun run src/seed-campus.ts     # campus (ต้องก่อนสุด)
+bun run src/seed-organizations.ts     # organizations
+bun run src/seed-users.ts             # users
 bun run src/seed-sdgs.ts              # sdgs (self-ref เท่านั้น)
 bun run src/seed-budget-supports.ts   # budget_supports
 

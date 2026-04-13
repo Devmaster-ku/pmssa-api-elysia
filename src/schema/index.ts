@@ -7,6 +7,7 @@ import {
   boolean,
   text,
   jsonb,
+  numeric,
   timestamp,
   date,
   uniqueIndex,
@@ -73,11 +74,22 @@ export const orgLevelEnum = pgEnum("org_level", [
 
 export const projectStatusEnum = pgEnum("project_status", [
   "draft",
-  "pending",
+  "pending_approval",
   "approved",
   "rejected",
-  "in_progress",
+  "active",
   "completed",
+  "cancelled",
+]);
+
+export const projectTypeEnum = pgEnum("project_type", ["main", "sub"]);
+
+export const targetStatusEnum = pgEnum("target_status", [
+  "pending",
+  "in_progress",
+  "achieved",
+  "completed",
+  "cancelled",
 ]);
 
 export const roleInProjectEnum = pgEnum("role_in_project", [
@@ -100,6 +112,25 @@ export const announcementTypeEnum = pgEnum("announcement_type", [
   "warning",
   "success",
   "danger",
+]);
+
+export const fundingGroupEnum = pgEnum("funding_group", [
+  "main",
+  "supplement",
+  "other",
+]);
+
+export const workPlanStatusEnum = pgEnum("work_plan_status", [
+  "pending",
+  "in_progress",
+  "completed",
+  "cancelled",
+]);
+
+export const budgetExpenseTypeEnum = pgEnum("budget_expense_type", [
+  "main",
+  "sub",
+  "custom",
 ]);
 
 // =============================================
@@ -218,26 +249,66 @@ export const projects = pgTable(
   "projects",
   {
     id: serial("id").primaryKey(),
+
+    // โครงสร้างลำดับชั้น
+    parentId: integer("parent_id"),           // self-ref สำหรับโครงการแม่-ลูก
+    projectCode: varchar("project_code", { length: 100 }),
     projectName: varchar("project_name", { length: 500 }).notNull(),
+    projectType: projectTypeEnum("project_type").notNull().default("main"), // main | sub
+    level: integer("level").default(0),       // ระดับลำดับชั้น (0 = โครงการหลัก)
+    path: varchar("path", { length: 500 }),   // เส้นทางลำดับชั้น เช่น "113/156"
+
+    // สังกัดและปีงบประมาณ
     orgId: integer("org_id")
       .notNull()
       .references(() => organizations.id, { onDelete: "cascade" }),
-    fiscalYear: integer("fiscal_year").notNull(),
+    year: varchar("year", { length: 10 }).notNull().default("2568"), // ปีงบประมาณ (พ.ศ.)
+
+    // งบประมาณ
+    budgetTypeId: integer("budget_type_id"),   // FK to budget_types
+    budgetGroupId: integer("budget_group_id"), // FK to budget_groups
+    initialBudget: numeric("initial_budget", { precision: 15, scale: 2 }),
+    allocatedBudget: numeric("allocated_budget", { precision: 15, scale: 2 }),
+    actualValue: numeric("actual_value", { precision: 15, scale: 2 }).default("0"),
+
+    // ข้อมูลโครงการ
+    recipient: varchar("recipient", { length: 500 }),
+    documentReference: varchar("document_reference", { length: 500 }),
+    documentNumber: varchar("document_number", { length: 255 }),
+    documentDate: date("document_date"),
+    content: text("content"),
+    notes: text("notes"),
+
+    // สถานะและผู้รับผิดชอบ
     status: projectStatusEnum("status").notNull().default("draft"),
-    createdBy: integer("created_by").references(() => users.id, {
-      onDelete: "set null",
-    }),
-    leadUserId: integer("lead_user_id").references(() => users.id, {
-      onDelete: "set null",
-    }),
+    createdBy: integer("created_by").references(() => users.id, { onDelete: "set null" }),
+    leadUserId: integer("lead_user_id").references(() => users.id, { onDelete: "set null" }),
+
+    // Workflow timestamps
+    submittedAt: timestamp("submitted_at"),
+    submittedBy: integer("submitted_by").references(() => users.id, { onDelete: "set null" }),
+    approvedAt: timestamp("approved_at"),
+    approvedBy: integer("approved_by").references(() => users.id, { onDelete: "set null" }),
+    approvalNote: text("approval_note"),
+    rejectedAt: timestamp("rejected_at"),
+    rejectedBy: integer("rejected_by").references(() => users.id, { onDelete: "set null" }),
+    rejectionReason: text("rejection_reason"),
+    startedAt: timestamp("started_at"),
+    startedBy: integer("started_by").references(() => users.id, { onDelete: "set null" }),
+
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at").defaultNow().notNull(),
+    deletedAt: timestamp("deleted_at"),
   },
   (table) => [
+    index("idx_projects_parent_id").on(table.parentId),
     index("idx_projects_org_id").on(table.orgId),
     index("idx_projects_status").on(table.status),
-    index("idx_projects_fiscal_year").on(table.fiscalYear),
+    index("idx_projects_year").on(table.year),
+    index("idx_projects_project_type").on(table.projectType),
     index("idx_projects_lead_user_id").on(table.leadUserId),
+    index("idx_projects_budget_type_id").on(table.budgetTypeId),
+    index("idx_projects_budget_group_id").on(table.budgetGroupId),
   ]
 );
 
@@ -262,6 +333,131 @@ export const projectMembers = pgTable(
   (table) => [
     uniqueIndex("uq_project_user").on(table.projectId, table.userId),
     index("idx_project_members_user_id").on(table.userId),
+  ]
+);
+
+// =============================================
+// ตาราง project_details - รายละเอียดโครงการ
+// =============================================
+export const projectDetails = pgTable(
+  "project_details",
+  {
+    id: serial("id").primaryKey(),
+    projectId: integer("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    projectManagerId: integer("project_manager_id").references(() => users.id, { onDelete: "set null" }),
+    departmentId: integer("department_id").references(() => organizations.id, { onDelete: "set null" }),
+
+    // เนื้อหาโครงการ
+    principlesAndReasons: text("principles_and_reasons"),  // หลักการและเหตุผล
+    objectives: text("objectives"),                        // วัตถุประสงค์
+    targetGroup: text("target_group"),                     // กลุ่มเป้าหมาย
+    projectScope: text("project_scope"),                   // ขอบเขตโครงการ
+    successCriteria: text("success_criteria"),             // เกณฑ์ความสำเร็จ
+    riskAssessment: text("risk_assessment"),               // การประเมินความเสี่ยง
+
+    // กำหนดการ
+    projectStartDate: date("project_start_date"),
+    projectEndDate: date("project_end_date"),
+    expectedCompletionDate: date("expected_completion_date"),
+
+    // ยุทธศาสตร์ที่เชื่อมโยง
+    strategyId: integer("strategy_id").references(() => strategies.id, { onDelete: "set null" }),
+    strategyAlignments: jsonb("strategy_alignments"),
+
+    // เอกสารและข้อมูลอ้างอิง
+    bookNumber: varchar("book_number", { length: 100 }),
+    dateInfo: varchar("date_info", { length: 255 }),
+
+    // สรุปผลการดำเนินงาน
+    summaryInfo: text("summary_info"),
+    summaryCompletedAt: timestamp("summary_completed_at"),
+    summaryCompletedBy: integer("summary_completed_by").references(() => users.id, { onDelete: "set null" }),
+
+    // ไฟล์แนบ
+    supportingDocumentPathNew: varchar("supporting_document_path_new", { length: 500 }),
+    supportingDocumentNameNew: varchar("supporting_document_name_new", { length: 500 }),
+    evaluationDocumentPathNew: varchar("evaluation_document_path_new", { length: 500 }),
+    evaluationDocumentNameNew: varchar("evaluation_document_name_new", { length: 500 }),
+
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+    deletedAt: timestamp("deleted_at"),
+  },
+  (table) => [
+    index("idx_project_details_project_id").on(table.projectId),
+    index("idx_project_details_project_manager_id").on(table.projectManagerId),
+    index("idx_project_details_department_id").on(table.departmentId),
+    index("idx_project_details_strategy_id").on(table.strategyId),
+  ]
+);
+
+// =============================================
+// ตาราง project_targets - เป้าหมายโครงการ
+// =============================================
+export const projectTargets = pgTable(
+  "project_targets",
+  {
+    id: serial("id").primaryKey(),
+    projectDetailId: integer("project_detail_id")
+      .notNull()
+      .references(() => projectDetails.id, { onDelete: "cascade" }),
+
+    targetDescription: text("target_description"),        // คำอธิบายเป้าหมาย
+    orderNumber: integer("order_number"),
+    targetStatus: targetStatusEnum("target_status").default("pending"),
+
+    // ค่าเป้าหมาย
+    targetValue: numeric("target_value", { precision: 15, scale: 2 }),
+    actualValue: numeric("actual_value", { precision: 15, scale: 2 }),
+    measurementUnit: varchar("measurement_unit", { length: 100 }),
+    completionPercentage: numeric("completion_percentage", { precision: 5, scale: 2 }).default("0"),
+
+    // กำหนดการ
+    targetStartDate: date("target_start_date"),
+    targetEndDate: date("target_end_date"),
+    actualCompletionDate: date("actual_completion_date"),
+
+    // บันทึกผล
+    targetCriteria: text("target_criteria"),
+    achievementNotes: text("achievement_notes"),
+    challenges: text("challenges"),
+    lessonsLearned: text("lessons_learned"),
+
+    responsibleUserId: integer("responsible_user_id").references(() => users.id, { onDelete: "set null" }),
+
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+    deletedAt: timestamp("deleted_at"),
+  },
+  (table) => [
+    index("idx_project_targets_project_detail_id").on(table.projectDetailId),
+    index("idx_project_targets_target_status").on(table.targetStatus),
+    index("idx_project_targets_responsible_user_id").on(table.responsibleUserId),
+  ]
+);
+
+// =============================================
+// ตาราง project_detail_sdgs - โครงการกับ SDGs (junction table)
+// =============================================
+export const projectDetailSdgs = pgTable(
+  "project_detail_sdgs",
+  {
+    id: serial("id").primaryKey(),
+    projectDetailId: integer("project_detail_id")
+      .notNull()
+      .references(() => projectDetails.id, { onDelete: "cascade" }),
+    sdgId: integer("sdg_id")
+      .notNull()
+      .references(() => sdgs.id, { onDelete: "cascade" }),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("uq_project_detail_sdg").on(table.projectDetailId, table.sdgId),
+    index("idx_project_detail_sdgs_project_detail_id").on(table.projectDetailId),
+    index("idx_project_detail_sdgs_sdg_id").on(table.sdgId),
   ]
 );
 
@@ -451,6 +647,26 @@ export const strategicDeanTactics = pgTable(
   (table) => [
     index("idx_strategic_dean_tactics_strategy_id").on(table.strategicDeanStrategyId),
     index("idx_strategic_dean_tactics_is_active").on(table.isActive),
+  ]
+);
+
+// =============================================
+// ตาราง provinces - จังหวัด
+// =============================================
+export const provinces = pgTable(
+  "provinces",
+  {
+    id: serial("id").primaryKey(),
+    nameTh: varchar("name_th", { length: 255 }).notNull(),
+    nameEn: varchar("name_en", { length: 255 }),
+    geographyId: integer("geography_id"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+    deletedAt: timestamp("deleted_at"),
+  },
+  (table) => [
+    index("idx_provinces_name_th").on(table.nameTh),
+    index("idx_provinces_geography_id").on(table.geographyId),
   ]
 );
 
@@ -707,6 +923,12 @@ export const userAffiliationsRelations = relations(
 
 // Project relations
 export const projectsRelations = relations(projects, ({ one, many }) => ({
+  parent: one(projects, {
+    fields: [projects.parentId],
+    references: [projects.id],
+    relationName: "projectHierarchy",
+  }),
+  children: many(projects, { relationName: "projectHierarchy" }),
   organization: one(organizations, {
     fields: [projects.orgId],
     references: [organizations.id],
@@ -721,7 +943,85 @@ export const projectsRelations = relations(projects, ({ one, many }) => ({
     references: [users.id],
     relationName: "leadProjects",
   }),
+  submitter: one(users, {
+    fields: [projects.submittedBy],
+    references: [users.id],
+    relationName: "submittedProjects",
+  }),
+  approver: one(users, {
+    fields: [projects.approvedBy],
+    references: [users.id],
+    relationName: "approvedProjects",
+  }),
+  rejector: one(users, {
+    fields: [projects.rejectedBy],
+    references: [users.id],
+    relationName: "rejectedProjects",
+  }),
+  starter: one(users, {
+    fields: [projects.startedBy],
+    references: [users.id],
+    relationName: "startedProjects",
+  }),
+  budgetGroup: one(budgetGroups, {
+    fields: [projects.budgetGroupId],
+    references: [budgetGroups.id],
+  }),
   members: many(projectMembers),
+  details: many(projectDetails),
+}));
+
+// ProjectDetail relations
+export const projectDetailsRelations = relations(projectDetails, ({ one, many }) => ({
+  project: one(projects, {
+    fields: [projectDetails.projectId],
+    references: [projects.id],
+  }),
+  projectManager: one(users, {
+    fields: [projectDetails.projectManagerId],
+    references: [users.id],
+    relationName: "managedProjectDetails",
+  }),
+  department: one(organizations, {
+    fields: [projectDetails.departmentId],
+    references: [organizations.id],
+  }),
+  strategy: one(strategies, {
+    fields: [projectDetails.strategyId],
+    references: [strategies.id],
+  }),
+  summaryCompletedByUser: one(users, {
+    fields: [projectDetails.summaryCompletedBy],
+    references: [users.id],
+    relationName: "completedProjectDetails",
+  }),
+  targets: many(projectTargets),
+  sdgs: many(projectDetailSdgs),
+}));
+
+// ProjectTarget relations
+export const projectTargetsRelations = relations(projectTargets, ({ one }) => ({
+  projectDetail: one(projectDetails, {
+    fields: [projectTargets.projectDetailId],
+    references: [projectDetails.id],
+  }),
+  responsibleUser: one(users, {
+    fields: [projectTargets.responsibleUserId],
+    references: [users.id],
+    relationName: "responsibleProjectTargets",
+  }),
+}));
+
+// ProjectDetailSdg relations
+export const projectDetailSdgsRelations = relations(projectDetailSdgs, ({ one }) => ({
+  projectDetail: one(projectDetails, {
+    fields: [projectDetailSdgs.projectDetailId],
+    references: [projectDetails.id],
+  }),
+  sdg: one(sdgs, {
+    fields: [projectDetailSdgs.sdgId],
+    references: [sdgs.id],
+  }),
 }));
 
 // ProjectMember relations
@@ -936,4 +1236,221 @@ export const sdgsRelations = relations(sdgs, ({ one, many }) => ({
     relationName: "sdgHierarchy",
   }),
   children: many(sdgs, { relationName: "sdgHierarchy" }),
+}));
+
+// =============================================
+// ตาราง project_implementations - ข้อมูลการดำเนินโครงการ
+// =============================================
+export const projectImplementations = pgTable(
+  "project_implementations",
+  {
+    id: serial("id").primaryKey(),
+    projectId: integer("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    pastPerformance: text("past_performance"),             // ผลการดำเนินงานที่ผ่านมา
+    riskManagement: text("risk_management"),               // ความเสี่ยงและการบริหารความเสี่ยง
+    startDate: date("start_date"),                         // วันที่เริ่มดำเนินงาน
+    endDate: date("end_date"),                             // วันที่สิ้นสุดดำเนินงาน
+    projectLocation: text("project_location"),             // สถานที่จัดโครงการ
+    province: varchar("province", { length: 255 }),        // จังหวัดที่จัดโครงการ
+    evaluationMethod: text("evaluation_method"),           // วิธีประเมินผลโครงการ
+    expectedOutcome: text("expected_outcome"),             // ผลที่คาดว่าจะได้รับ
+    currentStep: integer("current_step").default(1),       // ขั้นตอนปัจจุบันที่บันทึก
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("idx_project_implementations_project_id").on(table.projectId),
+  ]
+);
+
+// =============================================
+// ตาราง project_operators - ผู้ดำเนินโครงการ
+// =============================================
+export const projectOperators = pgTable(
+  "project_operators",
+  {
+    id: serial("id").primaryKey(),
+    implementationId: integer("implementation_id")
+      .notNull()
+      .references(() => projectImplementations.id, { onDelete: "cascade" }),
+    userId: integer("user_id")
+      .references(() => users.id, { onDelete: "set null" }),
+    operatorName: varchar("operator_name", { length: 500 }), // ชื่อผู้ดำเนินโครงการ
+    responsibility: text("responsibility"),                   // หน้าที่ความรับผิดชอบ
+    orderNumber: integer("order_number"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("idx_project_operators_impl_id").on(table.implementationId),
+    index("idx_project_operators_user_id").on(table.userId),
+  ]
+);
+
+// =============================================
+// ตาราง project_funding_sources - งบประมาณและแหล่งเงิน
+// =============================================
+export const projectFundingSources = pgTable(
+  "project_funding_sources",
+  {
+    id: serial("id").primaryKey(),
+    implementationId: integer("implementation_id")
+      .notNull()
+      .references(() => projectImplementations.id, { onDelete: "cascade" }),
+    fundingGroup: fundingGroupEnum("funding_group").default("main"),  // กลุ่มแหล่งเงิน
+    fundingName: varchar("funding_name", { length: 500 }),            // ชื่อแหล่งเงิน
+    amount: numeric("amount", { precision: 15, scale: 2 }).default("0"), // จำนวนเงิน
+    fundingType: varchar("funding_type", { length: 255 }),            // ประเภทแหล่งเงิน
+    orderNumber: integer("order_number"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("idx_project_funding_sources_impl_id").on(table.implementationId),
+  ]
+);
+
+// =============================================
+// ตาราง project_work_plans - แผนการดำเนินงาน
+// =============================================
+export const projectWorkPlans = pgTable(
+  "project_work_plans",
+  {
+    id: serial("id").primaryKey(),
+    implementationId: integer("implementation_id")
+      .notNull()
+      .references(() => projectImplementations.id, { onDelete: "cascade" }),
+    title: varchar("title", { length: 500 }).notNull(),          // หัวข้อแผนการดำเนินงาน
+    description: text("description"),                             // รายละเอียด
+    startDate: date("start_date"),                                // วันที่เริ่ม
+    endDate: date("end_date"),                                    // วันที่สิ้นสุด
+    responsiblePerson: varchar("responsible_person", { length: 500 }), // ผู้รับผิดชอบ
+    status: workPlanStatusEnum("status").default("pending"),       // สถานะ
+    orderNumber: integer("order_number"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("idx_project_work_plans_impl_id").on(table.implementationId),
+  ]
+);
+
+// =============================================
+// ตาราง project_budget_usages - กำหนดการใช้งบประมาณ
+// =============================================
+export const projectBudgetUsages = pgTable(
+  "project_budget_usages",
+  {
+    id: serial("id").primaryKey(),
+    implementationId: integer("implementation_id")
+      .notNull()
+      .references(() => projectImplementations.id, { onDelete: "cascade" }),
+    parentId: integer("parent_id"),                               // self-ref สำหรับ sub ภายใต้ main
+    expenseType: budgetExpenseTypeEnum("expense_type").default("main"), // main | sub | custom
+    expenseDetailId: integer("expense_detail_id"),                // FK ไป budget_expense_details
+    expenseName: varchar("expense_name", { length: 500 }),        // ชื่อค่าใช้จ่าย
+    amount: numeric("amount", { precision: 15, scale: 2 }).default("0"),
+    calculationMethod: varchar("calculation_method", { length: 255 }),
+    necessityReason: text("necessity_reason"),                    // เหตุผลความจำเป็น
+    remark: text("remark"),                                       // หมายเหตุ
+    personnelCount: integer("personnel_count"),                   // จำนวนบุคลากร
+    orderNumber: integer("order_number"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("idx_project_budget_usages_impl_id").on(table.implementationId),
+    index("idx_project_budget_usages_parent_id").on(table.parentId),
+    index("idx_project_budget_usages_expense_type").on(table.expenseType),
+  ]
+);
+
+// =============================================
+// ตาราง project_signatories - ผู้บริหารที่ลงนามในโครงการ
+// =============================================
+export const projectSignatories = pgTable(
+  "project_signatories",
+  {
+    id: serial("id").primaryKey(),
+    implementationId: integer("implementation_id")
+      .notNull()
+      .references(() => projectImplementations.id, { onDelete: "cascade" }),
+    userId: integer("user_id")
+      .references(() => users.id, { onDelete: "set null" }),
+    signatoryName: varchar("signatory_name", { length: 500 }),
+    positionTitle: varchar("position_title", { length: 500 }),
+    signOrder: integer("sign_order"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("idx_project_signatories_impl_id").on(table.implementationId),
+    index("idx_project_signatories_user_id").on(table.userId),
+  ]
+);
+
+// =============================================
+// Relations: Project Implementation tables
+// =============================================
+export const projectImplementationsRelations = relations(projectImplementations, ({ one, many }) => ({
+  project: one(projects, {
+    fields: [projectImplementations.projectId],
+    references: [projects.id],
+  }),
+  operators: many(projectOperators),
+  fundingSources: many(projectFundingSources),
+  workPlans: many(projectWorkPlans),
+  budgetUsages: many(projectBudgetUsages),
+  signatories: many(projectSignatories),
+}));
+
+export const projectOperatorsRelations = relations(projectOperators, ({ one }) => ({
+  implementation: one(projectImplementations, {
+    fields: [projectOperators.implementationId],
+    references: [projectImplementations.id],
+  }),
+  user: one(users, {
+    fields: [projectOperators.userId],
+    references: [users.id],
+  }),
+}));
+
+export const projectFundingSourcesRelations = relations(projectFundingSources, ({ one }) => ({
+  implementation: one(projectImplementations, {
+    fields: [projectFundingSources.implementationId],
+    references: [projectImplementations.id],
+  }),
+}));
+
+export const projectWorkPlansRelations = relations(projectWorkPlans, ({ one }) => ({
+  implementation: one(projectImplementations, {
+    fields: [projectWorkPlans.implementationId],
+    references: [projectImplementations.id],
+  }),
+}));
+
+export const projectBudgetUsagesRelations = relations(projectBudgetUsages, ({ one, many }) => ({
+  implementation: one(projectImplementations, {
+    fields: [projectBudgetUsages.implementationId],
+    references: [projectImplementations.id],
+  }),
+  parent: one(projectBudgetUsages, {
+    fields: [projectBudgetUsages.parentId],
+    references: [projectBudgetUsages.id],
+    relationName: "budgetUsageHierarchy",
+  }),
+  children: many(projectBudgetUsages, { relationName: "budgetUsageHierarchy" }),
+}));
+
+export const projectSignatoriesRelations = relations(projectSignatories, ({ one }) => ({
+  implementation: one(projectImplementations, {
+    fields: [projectSignatories.implementationId],
+    references: [projectImplementations.id],
+  }),
+  user: one(users, {
+    fields: [projectSignatories.userId],
+    references: [users.id],
+  }),
 }));

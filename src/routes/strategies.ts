@@ -11,20 +11,11 @@ import { withCache, invalidate } from "../lib/cache";
 async function resolveCampusName(orgId: number): Promise<string | null> {
   const org = await db.query.organizations.findFirst({
     where: eq(organizations.id, orgId),
+    with: { campus: true },
   });
   if (!org) return null;
-
-  if (org.orgLevel === "university") return "บางเขน";
-  if (org.orgLevel === "campus") return org.nameTh;
-
-  if (org.campusId) {
-    const campus = await db.query.organizations.findFirst({
-      where: eq(organizations.id, org.campusId),
-    });
-    return campus?.nameTh ?? null;
-  }
-
-  return "บางเขน";
+  if (org.orgLevel === "university" || !org.campusId) return "บางเขน";
+  return org.campus?.nameTh ?? null;
 }
 
 export const strategyRoutes = new Elysia({ prefix: "/api/strategies" })
@@ -249,6 +240,61 @@ export const strategyRoutes = new Elysia({ prefix: "/api/strategies" })
       const rows = await db.query.strategies.findMany({
         where: and(
           eq(strategies.campus, "บางเขน"),
+          eq(strategies.isActive, true),
+          isNull(strategies.deletedAt)
+        ),
+        orderBy: [asc(strategies.orderList)],
+        with: {
+          tactics: {
+            where: and(
+              eq(strategicTactics.isActive, true),
+              isNull(strategicTactics.deletedAt)
+            ),
+            orderBy: [asc(strategicTactics.orderSequence)],
+          },
+        },
+      });
+      return { success: true, data: rows };
+    });
+  })
+
+  // -----------------------------------------------
+  // GET /api/strategies/campus
+  // ดึงยุทธศาสตร์ระดับวิทยาเขต ของผู้ใช้ที่ล็อกอิน
+  // -----------------------------------------------
+  .get("/campus", async ({ headers, jwtAccess, set }) => {
+    const authHeader = (headers as any).authorization || (headers as any).Authorization || "";
+    const token = String(authHeader).replace(/^Bearer\s+/i, "");
+
+    if (!token) {
+      set.status = 401;
+      return { success: false, message: "Unauthorized" };
+    }
+
+    let payload: any;
+    try {
+      payload = await jwtAccess.verify(token);
+    } catch {
+      set.status = 401;
+      return { success: false, message: "Invalid or expired token" };
+    }
+
+    if (!payload || payload.type !== "access") {
+      set.status = 401;
+      return { success: false, message: "Invalid token" };
+    }
+
+    const orgId = payload.orgId ? Number(payload.orgId) : null;
+    if (!orgId) return { success: true, data: [] };
+
+    const campusName = await resolveCampusName(orgId);
+    if (!campusName || campusName === "บางเขน") return { success: true, data: [] };
+
+    const cacheKey = `strategies:campus:${campusName}`;
+    return withCache(cacheKey, 600, async () => {
+      const rows = await db.query.strategies.findMany({
+        where: and(
+          eq(strategies.campus, campusName),
           eq(strategies.isActive, true),
           isNull(strategies.deletedAt)
         ),

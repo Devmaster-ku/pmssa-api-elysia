@@ -59,6 +59,7 @@ async function getUserAffiliations(userId: number) {
       organization: {
         with: {
           parent: true, // ดึง org แม่ (faculty) กรณีสังกัด department
+          campus: true, // ดึงข้อมูลส่วนงาน (วิทยาเขต)
         },
       },
       subDep: true, // หน่วยงานย่อย (sub_dep_id → organizations)
@@ -163,6 +164,7 @@ export const authRoutes = new Elysia({ prefix: "/api/auth" })
             role: activeAffiliation.role,
             positionTitle: activeAffiliation.positionTitle,
             organization: activeAffiliation.organization,
+            subDep: activeAffiliation.subDep ?? null,
           }
           : null,
         affiliations: affiliations.map((a) => ({
@@ -314,6 +316,7 @@ export const authRoutes = new Elysia({ prefix: "/api/auth" })
           role: activeAffiliation.role,
           positionTitle: activeAffiliation.positionTitle,
           organization: activeAffiliation.organization,
+          subDep: activeAffiliation.subDep ?? null,
         }
         : null,
       affiliations: affiliations.map((a) => ({
@@ -404,6 +407,7 @@ export const authRoutes = new Elysia({ prefix: "/api/auth" })
           role: affiliation.role,
           positionTitle: affiliation.positionTitle,
           organization: affiliation.organization,
+          subDep: affiliation.subDep ?? null,
         },
       };
     },

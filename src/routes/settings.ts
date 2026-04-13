@@ -352,13 +352,15 @@ export const settingsRoutes = new Elysia({ prefix: "/api/settings" })
   // -----------------------------------------------
   // GET /api/settings/campus — ดึงรายการวิทยาเขตทั้งหมด
   // -----------------------------------------------
-  .get("/campus", () =>
-    withCache("settings:campus", 1800, async () => {
+  .get("/campus", async () => {
+    console.log("[DEBUG] /api/settings/campus endpoint called");
+    try {
       const campusList = await db.query.campus.findMany({
         where: eq(campus.isActive, true),
         orderBy: (c, { asc }) => [asc(c.id)],
       });
-      return {
+      console.log("[DEBUG] Campus query result:", campusList.length, "items");
+      const response = {
         success: true,
         data: campusList.map((c) => ({
           id: c.id,
@@ -366,8 +368,16 @@ export const settingsRoutes = new Elysia({ prefix: "/api/settings" })
           nameEn: c.nameEn,
         })),
       };
-    }),
-  )
+      console.log("[DEBUG] Campus response:", response);
+      return response;
+    } catch (error) {
+      console.error("[ERROR] Campus query failed:", error);
+      return {
+        success: false,
+        error: String(error),
+      };
+    }
+  })
 
   // -----------------------------------------------
   // DELETE /api/settings/organizations/:id — ลบหน่วยงาน (soft delete)
@@ -726,32 +736,49 @@ export const settingsRoutes = new Elysia({ prefix: "/api/settings" })
       };
 
       const doInsert = () =>
-        db.insert(budgetGroups).values(insertValues).returning({ id: budgetGroups.id });
+        db
+          .insert(budgetGroups)
+          .values(insertValues)
+          .returning({ id: budgetGroups.id });
 
       try {
         const [inserted] = await doInsert();
         await invalidate("settings:budget-groups");
         await invalidate("settings:budget-expense-details");
-        return { success: true, message: "เพิ่มกลุ่มงบอุดหนุนสำเร็จ", id: inserted.id };
+        return {
+          success: true,
+          message: "เพิ่มกลุ่มงบอุดหนุนสำเร็จ",
+          id: inserted.id,
+        };
       } catch (err: any) {
         const code = err?.code ?? err?.cause?.code;
-        if (code === "23505" && (err?.cause?.constraint ?? err?.constraint) === "budget_groups_pkey") {
+        if (
+          code === "23505" &&
+          (err?.cause?.constraint ?? err?.constraint) === "budget_groups_pkey"
+        ) {
           // Sequence out of sync — reset to MAX(id) then retry once
           try {
             await db.execute(
-              sql`SELECT setval('budget_groups_id_seq', (SELECT MAX(id) FROM budget_groups))`
+              sql`SELECT setval('budget_groups_id_seq', (SELECT MAX(id) FROM budget_groups))`,
             );
             const [inserted] = await doInsert();
             await invalidate("settings:budget-groups");
             await invalidate("settings:budget-expense-details");
-            return { success: true, message: "เพิ่มกลุ่มงบอุดหนุนสำเร็จ", id: inserted.id };
+            return {
+              success: true,
+              message: "เพิ่มกลุ่มงบอุดหนุนสำเร็จ",
+              id: inserted.id,
+            };
           } catch {
             // sequence fix failed — fall through
           }
         }
         if (code === "23503")
           return { success: false, message: "ไม่พบประเภทงบอุดหนุนที่เลือก" };
-        return { success: false, message: "ไม่สามารถบันทึกได้ กรุณาลองใหม่อีกครั้ง" };
+        return {
+          success: false,
+          message: "ไม่สามารถบันทึกได้ กรุณาลองใหม่อีกครั้ง",
+        };
       }
     },
     {
@@ -835,12 +862,20 @@ export const settingsRoutes = new Elysia({ prefix: "/api/settings" })
 
     try {
       const groupId = Number(params.id);
-      console.log("[DELETE /budget-groups] called, id:", params.id, "→", groupId);
+      console.log(
+        "[DELETE /budget-groups] called, id:",
+        params.id,
+        "→",
+        groupId,
+      );
 
       const item = await db.query.budgetGroups.findFirst({
         where: eq(budgetGroups.id, groupId),
       });
-      console.log("[DELETE /budget-groups] found item:", item ? `id=${item.id} name=${item.name}` : "NOT FOUND");
+      console.log(
+        "[DELETE /budget-groups] found item:",
+        item ? `id=${item.id} name=${item.name}` : "NOT FOUND",
+      );
       if (!item) {
         set.status = 404;
         return { success: false, message: "ไม่พบข้อมูล" };
@@ -851,7 +886,10 @@ export const settingsRoutes = new Elysia({ prefix: "/api/settings" })
         where: eq(budgetExpenseDetails.budgetGroupId, groupId),
         columns: { id: true },
       });
-      console.log("[DELETE /budget-groups] budgetExpenseDetails (main) to delete:", mainItems.map(r => r.id));
+      console.log(
+        "[DELETE /budget-groups] budgetExpenseDetails (main) to delete:",
+        mainItems.map((r) => r.id),
+      );
 
       // 2) ลบ sub-items (parentId self-ref) ก่อน
       if (mainItems.length > 0) {
@@ -860,7 +898,10 @@ export const settingsRoutes = new Elysia({ prefix: "/api/settings" })
           .delete(budgetExpenseDetails)
           .where(inArray(budgetExpenseDetails.parentId, mainIds))
           .returning({ id: budgetExpenseDetails.id });
-        console.log("[DELETE /budget-groups] deleted sub-items:", deletedSubs.map(r => r.id));
+        console.log(
+          "[DELETE /budget-groups] deleted sub-items:",
+          deletedSubs.map((r) => r.id),
+        );
       }
 
       // 3) ลบ main items
@@ -868,19 +909,30 @@ export const settingsRoutes = new Elysia({ prefix: "/api/settings" })
         .delete(budgetExpenseDetails)
         .where(eq(budgetExpenseDetails.budgetGroupId, groupId))
         .returning({ id: budgetExpenseDetails.id });
-      console.log("[DELETE /budget-groups] deleted main items:", deletedMains.map(r => r.id));
+      console.log(
+        "[DELETE /budget-groups] deleted main items:",
+        deletedMains.map((r) => r.id),
+      );
 
       // 4) ลบ budgetGroup
       const deletedGroups = await db
         .delete(budgetGroups)
         .where(eq(budgetGroups.id, groupId))
         .returning({ id: budgetGroups.id });
-      console.log("[DELETE /budget-groups] deleted budgetGroups:", deletedGroups.map(r => r.id));
+      console.log(
+        "[DELETE /budget-groups] deleted budgetGroups:",
+        deletedGroups.map((r) => r.id),
+      );
 
       if (deletedGroups.length === 0) {
-        console.warn("[DELETE /budget-groups] WARNING: no rows deleted from budget_groups!");
+        console.warn(
+          "[DELETE /budget-groups] WARNING: no rows deleted from budget_groups!",
+        );
         set.status = 500;
-        return { success: false, message: "ไม่สามารถลบได้ ข้อมูลไม่ถูกลบจากฐานข้อมูล" };
+        return {
+          success: false,
+          message: "ไม่สามารถลบได้ ข้อมูลไม่ถูกลบจากฐานข้อมูล",
+        };
       }
 
       await invalidate("settings:budget-groups");
@@ -981,7 +1033,10 @@ export const settingsRoutes = new Elysia({ prefix: "/api/settings" })
             name: body.name,
             detailType: body.detailType ?? item.detailType,
             detailTypeDisplay: body.detailTypeDisplay ?? item.detailTypeDisplay,
-            parentId: body.parentId !== undefined ? (body.parentId ?? null) : item.parentId,
+            parentId:
+              body.parentId !== undefined
+                ? (body.parentId ?? null)
+                : item.parentId,
             isActive: body.isActive ?? item.isActive,
           })
           .where(eq(budgetExpenseDetails.id, Number(params.id)));
@@ -1043,6 +1098,21 @@ export const settingsRoutes = new Elysia({ prefix: "/api/settings" })
   // =============================================
   // Permission Matrix — การจัดการสิทธิ์ในระบบตาม role
   // =============================================
+
+  // GET /api/settings/permissions/my — ดึง permissions ของ role ตัวเอง (ทุก role เข้าถึงได้)
+  .get("/permissions/my", async ({ auth }) => {
+    const role = auth.role;
+    if (!role) return { success: true, permissions: [] };
+
+    const rows = await db.query.rolePermissions.findMany({
+      where: and(
+        eq(rolePermissions.role, role as any),
+        eq(rolePermissions.granted, true)
+      ),
+    });
+
+    return { success: true, permissions: rows.map((r) => r.permissionCode) };
+  })
 
   // GET /api/settings/permissions/matrix — ดึง permission matrix ทั้งหมด
   .get("/permissions/matrix", async ({ auth, set }) => {
@@ -1122,23 +1192,25 @@ export const settingsRoutes = new Elysia({ prefix: "/api/settings" })
         }
       }
 
-      // Upsert ทีละรายการ (matrix เล็ก ~180 rows)
-      for (const item of body.matrix) {
-        await db
-          .insert(rolePermissions)
-          .values({
-            role: item.role as any,
-            permissionCode: item.permissionCode,
-            granted: item.granted,
-            updatedBy: auth.user?.id ?? null,
-          })
-          .onDuplicateKeyUpdate({
-            set: {
-              granted: item.granted,
-              updatedBy: auth.user?.id ?? null,
-            },
-          });
-      }
+      // Bulk upsert ทั้ง matrix ใน query เดียว
+      const records = body.matrix.map((item) => ({
+        role: item.role as any,
+        permissionCode: item.permissionCode,
+        granted: item.granted,
+        updatedBy: auth.user?.id ?? null,
+      }));
+
+      await db
+        .insert(rolePermissions)
+        .values(records)
+        .onConflictDoUpdate({
+          target: [rolePermissions.role, rolePermissions.permissionCode],
+          set: {
+            granted: sql`EXCLUDED.granted`,
+            updatedBy: sql`EXCLUDED.updated_by`,
+            updatedAt: sql`NOW()`,
+          },
+        });
 
       await invalidate("settings:permissions:matrix");
       return { success: true, message: "บันทึกสิทธิ์สำเร็จ" };

@@ -1,3 +1,4 @@
+import { sql } from "drizzle-orm";
 import { db } from "./db";
 import { userAffiliations, users, organizations } from "./schema";
 import data from "../json/department-users.json";
@@ -65,9 +66,16 @@ function mapRoleToEnum(role: string): UserRole {
 async function seed() {
   const items: DepartmentUserJson[] = data.data;
 
-  console.log(`Found ${items.length} department users to migrate...`);
+  console.log(`Found ${items.length} department users in JSON file.`);
 
-  // Get existing user IDs and department IDs
+  // ลบข้อมูลเก่าทั้งหมดแล้ว reset sequence
+  // audit_logs.actor_affiliation_id จะถูก set เป็น NULL อัตโนมัติ (ON DELETE SET NULL)
+  console.log("Clearing existing user_affiliations data...");
+  await db.execute(sql`DELETE FROM public.user_affiliations`);
+  await db.execute(sql`ALTER SEQUENCE user_affiliations_id_seq RESTART WITH 1`);
+  console.log("Cleared. Sequence reset to 1.");
+
+  // Get existing user IDs and organization IDs
   const existingUsers = await db.select({ id: users.id }).from(users);
   const existingOrgs = await db.select({ id: organizations.id }).from(organizations);
 
@@ -80,27 +88,25 @@ async function seed() {
     const orgExists = orgIds.has(item.department_id);
 
     if (!userExists) {
-      console.log(`Skipping department user ${item.id}: user_id ${item.user_id} does not exist`);
+      console.log(`Skipping item id=${item.id}: user_id ${item.user_id} not found`);
     }
     if (!orgExists) {
-      console.log(`Skipping department user ${item.id}: department_id ${item.department_id} does not exist in organizations`);
+      console.log(`Skipping item id=${item.id}: department_id ${item.department_id} not found in organizations`);
     }
 
     return userExists && orgExists;
   });
 
-  console.log(`After filtering: ${validItems.length} valid department users to migrate...`);
+  console.log(`Valid records to insert: ${validItems.length} / ${items.length}`);
 
   let inserted = 0;
-  let skipped = 0;
 
-  // Upsert ทีละ batch (50 records) — เพิ่มเฉพาะที่ยังไม่มีใน DB
-  // unique constraint: (userId, orgId, role)
+  // Insert ทีละ batch (50 records)
   const batchSize = 50;
   for (let i = 0; i < validItems.length; i += batchSize) {
     const batch = validItems.slice(i, i + batchSize);
 
-    const result = await db.insert(userAffiliations).values(
+    await db.insert(userAffiliations).values(
       batch.map((item) => ({
         userId: item.user_id,
         orgId: item.department_id,
@@ -112,15 +118,13 @@ async function seed() {
         createdAt: new Date(item.created_at),
         updatedAt: new Date(item.updated_at),
       }))
-    ).onConflictDoNothing(); // ข้ามถ้า (userId, orgId, role) ซ้ำ
+    );
 
-    const batchInserted = Number((result as any).rowCount ?? batch.length);
-    inserted += batchInserted;
-    skipped += batch.length - batchInserted;
-    console.log(`Processed ${Math.min(i + batchSize, validItems.length)}/${validItems.length} records...`);
+    inserted += batch.length;
+    console.log(`Inserted ${Math.min(i + batchSize, validItems.length)}/${validItems.length}...`);
   }
 
-  console.log(`Migration complete! ${inserted} inserted, ${skipped} skipped (already existed).`);
+  console.log(`Done! ${inserted} records inserted into user_affiliations.`);
   process.exit(0);
 }
 
