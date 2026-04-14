@@ -1356,6 +1356,7 @@ export const projectBudgetUsages = pgTable(
     necessityReason: text("necessity_reason"),                    // เหตุผลความจำเป็น
     remark: text("remark"),                                       // หมายเหตุ
     personnelCount: integer("personnel_count"),                   // จำนวนบุคลากร
+    unitType: varchar("unit_type", { length: 50 }),               // หน่วย เช่น คน/ชั่วโมง/วัน/รายการ
     orderNumber: integer("order_number"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at").defaultNow().notNull(),

@@ -9,6 +9,7 @@ import {
   projectWorkPlans,
   projectBudgetUsages,
   projectSignatories,
+  budgetExpenseDetails,
 } from "../schema";
 import { eq, and, isNull, asc } from "drizzle-orm";
 import { authMiddleware, getAccessibleOrgIds } from "../middleware/auth";
@@ -17,6 +18,23 @@ export const projectImplementationRoutes = new Elysia({
   prefix: "/api/projects",
 })
   .use(authMiddleware)
+
+  // -----------------------------------------------
+  // GET /api/projects/budget-expense-options
+  // ดึง budget_expense_details ทั้ง main และ sub (isActive=true) สำหรับ dropdown
+  // -----------------------------------------------
+  .get("/budget-expense-options", async ({ auth, set }) => {
+    if (!auth?.role) {
+      set.status = 401;
+      return { success: false, message: "กรุณาเข้าสู่ระบบ" };
+    }
+    const data = await db.query.budgetExpenseDetails.findMany({
+      where: (t, { eq }) => eq(t.isActive, true),
+      columns: { id: true, name: true, detailType: true, parentId: true },
+      orderBy: (t, { asc }) => [asc(t.name)],
+    });
+    return { success: true, data };
+  })
 
   // -----------------------------------------------
   // GET /api/projects/:id/implementation
@@ -361,6 +379,7 @@ export const projectImplementationRoutes = new Elysia({
                   necessityReason: bu.necessityReason || null,
                   remark: bu.remark || null,
                   personnelCount: bu.personnelCount || null,
+                  unitType: bu.unitType || null,
                   orderNumber: idx + 1,
                 })
                 .returning();
@@ -376,6 +395,8 @@ export const projectImplementationRoutes = new Elysia({
                     expenseName: sub.expenseName || null,
                     amount: String(sub.amount || 0),
                     remark: sub.remark || null,
+                    personnelCount: sub.personnelCount || null,
+                    unitType: sub.unitType || null,
                     orderNumber: sIdx + 1,
                   }))
                 );
@@ -429,6 +450,7 @@ export const projectImplementationRoutes = new Elysia({
               necessityReason: t.Optional(t.Union([t.String(), t.Null()])),
               remark: t.Optional(t.Union([t.String(), t.Null()])),
               personnelCount: t.Optional(t.Union([t.Number(), t.Null()])),
+              unitType: t.Optional(t.Union([t.String(), t.Null()])),
               subItems: t.Optional(
                 t.Array(
                   t.Object({
@@ -440,6 +462,8 @@ export const projectImplementationRoutes = new Elysia({
                     ),
                     amount: t.Optional(t.Union([t.Number(), t.String()])),
                     remark: t.Optional(t.Union([t.String(), t.Null()])),
+                    personnelCount: t.Optional(t.Union([t.Number(), t.Null()])),
+                    unitType: t.Optional(t.Union([t.String(), t.Null()])),
                   })
                 )
               ),
